@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     gemini_api_key: str = "AIzaSyA71NJ_jH8PzZKy3rkIUvyoaOtiYbQa5y4"
     embedding_model: str = "gemini-embedding-001"
     query_rewrite_model: str = "gemini-3.5-flash"
+    min_cosine_similarity: float = 0.4
+    min_fts_matched_terms: int = 2
 
 
 settings = Settings()

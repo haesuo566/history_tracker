@@ -9,7 +9,7 @@ VEC_CHUNKS_DDL = f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
     document_id TEXT PARTITION KEY,
     seq INTEGER,
-    embedding FLOAT[{settings.embedding_dim}]
+    embedding FLOAT[{settings.embedding_dim}] distance_metric=cosine
 )
 """
 
