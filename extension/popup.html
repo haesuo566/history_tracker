@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    body { width: 304px; }
+
+    .pop-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 13px 14px 11px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .pop-version { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+    .pop-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 11px; }
+  </style>
+</head>
+<body>
+  <div class="pop-head">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7.5V12l3 2" />
+        </svg>
+      </span>
+      <h1 class="brand-title">방문기록 트래커</h1>
+    </div>
+    <span class="pop-version" id="version"></span>
+  </div>
+
+  <div class="pop-body">
+    <div class="status-card" id="statusCard">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="status-text">
+        <div class="status-title" id="trackingLabel">수집 중</div>
+        <div class="status-sub" id="trackingSub">방문이 끝나면 서버로 전송합니다</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="trackingToggle" aria-label="수집 켜기/끄기" />
+        <span class="track" aria-hidden="true"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <dl class="info-list">
+      <div class="info-row">
+        <dt>최소 체류시간</dt>
+        <dd id="minDwell">-</dd>
+      </div>
+      <div class="info-row">
+        <dt>재전송 대기</dt>
+        <dd><span class="badge" id="queueCount">-</span></dd>
+      </div>
+      <div class="info-row">
+        <dt>전송 대상</dt>
+        <dd class="mono" id="endpoint" title="">-</dd>
+      </div>
+      <div class="info-row">
+        <dt>기기 ID</dt>
+        <dd class="mono" id="deviceId" title="">-</dd>
+      </div>
+    </dl>
+
+    <button type="button" class="btn btn-ghost btn-block" id="openOptions">설정 열기</button>
+  </div>
+
+  <script src="dwell.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

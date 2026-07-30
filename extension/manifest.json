@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "방문기록 트래커",
+  "version": "0.1.0",
+  "description": "방문한 페이지의 URL, 체류시간, 본문 텍스트를 수집해 API 서버로 전송합니다.",
+  "permissions": ["webNavigation", "tabs", "idle", "storage", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["Readability.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "방문기록 트래커"
+  },
+  "options_page": "options.html"
+}

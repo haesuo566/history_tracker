@@ -1,0 +1,311 @@
+/* popup.html / options.html 공용 스타일. 색상은 토큰으로만 다루고
+   다크모드는 prefers-color-scheme로 토큰만 갈아끼운다. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-alt: #f6f7f9;
+  --border: #e5e7eb;
+  --border-strong: #d3d7de;
+  --text: #14161a;
+  --text-dim: #666c76;
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef0ff;
+  --on: #16a34a;
+  --on-soft: #e8f7ed;
+  --off: #a1a6ad;
+  --danger: #dc2626;
+
+  --radius: 10px;
+  --radius-lg: 14px;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 2px 8px rgba(16, 24, 40, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171b;
+    --surface: #1d2025;
+    --surface-alt: #23262c;
+    --border: #2e3238;
+    --border-strong: #3c4249;
+    --text: #e8eaed;
+    --text-dim: #9aa1ab;
+    --accent: #7d75f0;
+    --accent-hover: #9089f5;
+    --accent-soft: #272b40;
+    --on: #37c26a;
+    --on-soft: #1c2f24;
+    --off: #5f656d;
+    --danger: #f87171;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 10px rgba(0, 0, 0, 0.25);
+  }
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Malgun Gothic', 'Apple SD Gothic Neo',
+    system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+
+/* ── 브랜드 마크 ─────────────────────────────────────── */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-mark {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.brand-mark svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.brand-title {
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+/* ── 토글 스위치 ─────────────────────────────────────── */
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  /* .thumb가 transform으로 스택 컨텍스트를 만들어 위에 깔리므로 클릭 대상을 명시적으로 올린다 */
+  z-index: 1;
+}
+
+.switch .track {
+  width: 42px;
+  height: 24px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--off);
+  display: flex;
+  align-items: center;
+  transition: background 0.18s ease;
+}
+
+.switch .thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s cubic-bezier(0.32, 0.9, 0.3, 1);
+}
+
+.switch input:checked + .track {
+  background: var(--on);
+}
+
+.switch input:checked + .track .thumb {
+  transform: translateX(18px);
+}
+
+.switch input:focus-visible + .track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── 상태 카드 (수집 켜기/끄기) ──────────────────────── */
+.status-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--on-soft);
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.status-card.is-off {
+  background: var(--surface-alt);
+}
+
+.status-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--on);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--on) 22%, transparent);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.status-card.is-off .status-dot {
+  background: var(--off);
+  box-shadow: none;
+  animation: none;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--on) 22%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in srgb, var(--on) 6%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot {
+    animation: none;
+  }
+  .switch .thumb,
+  .switch .track {
+    transition: none;
+  }
+}
+
+.status-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.status-title {
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.status-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+/* ── 정보 리스트 ─────────────────────────────────────── */
+.info-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  font-size: 12.5px;
+}
+
+.info-row + .info-row {
+  border-top: 1px solid var(--border);
+}
+
+.info-row dt,
+.info-row .info-key {
+  color: var(--text-dim);
+  flex: none;
+}
+
+.info-row dd,
+.info-row .info-val {
+  margin: 0;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.badge {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.badge.is-warn {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  color: var(--danger);
+}
+
+/* ── 버튼 ────────────────────────────────────────────── */
+.btn {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.btn:hover {
+  background: var(--accent-hover);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-ghost {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-alt);
+}
+
+.btn-block {
+  display: block;
+  width: 100%;
+}
