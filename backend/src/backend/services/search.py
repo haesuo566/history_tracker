@@ -18,7 +18,7 @@ FTS_SEARCH_SQL = text(
     "SELECT vector_key, rank FROM chunk_fts WHERE chunk_fts MATCH :query ORDER BY rank LIMIT :limit"
 )
 
-ChunkKey = tuple[str, int]
+type ChunkKey = tuple[str, int]
 
 
 def _rrf_merge(*ranked_lists: list[ChunkKey]) -> dict[ChunkKey, float]:
