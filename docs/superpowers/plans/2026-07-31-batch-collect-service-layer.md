@@ -147,8 +147,10 @@ Expected: `B008 Do not perform function call \`Depends\` in argument defaults` �
 
 - [ ] **Step 3: 앱 전체 import 검증 (라우터 배선 확인)**
 
-Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; print([r.path for r in app.routes])"`
+Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; print(sorted(app.openapi()['paths'].keys()))"`
 Expected: 출력 목록에 `/batch`가 포함되고 예외 없음
+
+(참고: 이 venv의 FastAPI 버전은 `app.routes`에 flatten된 `APIRoute`가 아니라 `_IncludedRouter` 래퍼를 담고 있어 `[r.path for r in app.routes]` 형태는 `AttributeError`가 난다 — 리팩토링 이전 코드에서도 동일하게 실패하는 사전 존재 이슈였음을 Task 2 스펙 리뷰에서 확인함. `app.openapi()['paths']`는 이 버전에서도 안정적으로 동작한다.)
 
 - [ ] **Step 4: Commit**
 
@@ -246,8 +248,10 @@ Expected: `B008 Do not perform function call \`Depends\` in argument defaults` �
 
 - [ ] **Step 3: 앱 전체 import 검증 (라우터 배선 확인)**
 
-Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; print([r.path for r in app.routes])"`
+Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; print(sorted(app.openapi()['paths'].keys()))"`
 Expected: 출력 목록에 `/collect`가 포함되고 예외 없음
+
+(참고: `app.openapi()['paths']` 사용 이유는 Task 2와 동일 — 이 venv의 FastAPI 버전에서 `app.routes`가 flatten된 `APIRoute`를 담고 있지 않아 `[r.path for r in app.routes]`는 `AttributeError`가 난다.)
 
 - [ ] **Step 4: Commit**
 
@@ -269,7 +273,7 @@ Expected: Task 1~4에서 확인한 기존 이슈(BLE001 1건 in `services/indexi
 
 - [ ] **Step 2: 앱 기동 시점 배선 최종 확인**
 
-Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; assert any(r.path == '/batch' for r in app.routes); assert any(r.path == '/collect' for r in app.routes); print('wiring ok')"`
+Run: `PYTHONPATH=./src ./.venv/Scripts/python.exe -c "from backend.main import app; paths = app.openapi()['paths']; assert '/batch' in paths; assert '/collect' in paths; print('wiring ok')"`
 Expected: `wiring ok` 출력
 
 - [ ] **Step 3: git status로 의도한 파일만 변경됐는지 확인**
