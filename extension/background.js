@@ -3,7 +3,6 @@ importScripts('dwell.js');
 const RETRY_ALARM = 'retry-queue';
 const RETRY_INTERVAL_MINUTES = 0.5; // 30초마다 실패 건 재시도
 const NOISE_FLOOR_MS = 500; // 이보다 짧은 체류는 탭 전환 튐으로 보고 무조건 버림
-const MAX_CONTENT_LENGTH = 5000;
 const DEFAULT_API_ENDPOINT = 'http://127.0.0.1:8000';
 // 이전 기본값. 실제로 존재하는 placeholder 도메인이라 설정 없이 리로드하면 그쪽으로
 // 조용히 전송을 시도했다. 사용자가 직접 넣은 주소는 건드리지 않고 이 값만 교체한다.
@@ -246,7 +245,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
   getSession().then((session) => {
     if (session && session.tabId === tabId && session.url === message.url) {
-      session.content = (message.text || '').slice(0, MAX_CONTENT_LENGTH);
+      session.content = message.text || '';
       session.title = message.title || session.title;
       setSession(session);
     }

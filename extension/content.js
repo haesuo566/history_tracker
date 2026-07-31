@@ -10,7 +10,7 @@
   function reportContent() {
     const article = parseArticle();
     const rawText = article?.textContent || (document.body ? document.body.innerText : '');
-    const text = rawText.replace(/\s+/g, ' ').trim().slice(0, 5000);
+    const text = rawText.replace(/\s+/g, ' ').trim();
 
     chrome.runtime.sendMessage({
       type: 'PAGE_CONTENT',
