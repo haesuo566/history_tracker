@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from loguru import logger
 
 from backend.core.config import settings
 
@@ -21,6 +22,7 @@ def _get_client() -> genai.Client:
 
 def rewrite_query(message: str) -> str:
     """사용자 입력을 검색에 적합한 문장으로 재작성한다."""
+    logger.debug("rewriting query via {}: {!r}", settings.query_rewrite_model, message)
     response = _get_client().models.generate_content(
         model=settings.query_rewrite_model,
         contents=message,

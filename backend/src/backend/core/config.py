@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     app_name: str = "backend"
+    log_level: str = "INFO"
     database_url: str = "sqlite:///./app.db"
     embedding_dim: int = 3072
     gemini_api_key: str = "AIzaSyA71NJ_jH8PzZKy3rkIUvyoaOtiYbQa5y4"

@@ -1,4 +1,5 @@
 import sqlite_vec
+from loguru import logger
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ INSERT_CHUNK_FTS = text("INSERT INTO chunk_fts (vector_key, body) VALUES (:vecto
 def run_indexing_batch(db: Session) -> BatchResponse:
     """checked=False인 문서를 청킹/임베딩해 인덱싱하고 결과 통계를 반환한다."""
     documents = db.scalars(select(Document).where(Document.checked.is_(False))).all()
+    logger.info("indexing batch started: {} document(s) pending", len(documents))
 
     succeeded = 0
     failed = 0
@@ -55,9 +57,12 @@ def run_indexing_batch(db: Session) -> BatchResponse:
                         )
         except Exception:
             failed += 1
+            logger.exception("indexing failed: document_id={} url={}", document.document_id, document.url)
         else:
             succeeded += 1
 
     db.commit()
+
+    logger.info("indexing batch finished: attempted={} succeeded={} failed={}", len(documents), succeeded, failed)
 
     return BatchResponse(attempted=len(documents), succeeded=succeeded, failed=failed)

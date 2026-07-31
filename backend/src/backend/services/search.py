@@ -1,4 +1,5 @@
 import sqlite_vec
+from loguru import logger
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -35,6 +36,7 @@ def _rrf_merge(*ranked_lists: list[ChunkKey]) -> dict[ChunkKey, float]:
 def search_history(query: str, db: Session, limit: int = 50) -> ChatResult | None:
     """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 1위 문서를 반환한다."""
     parsed_query = rewrite_query(query)
+    logger.debug("search query rewritten: {!r} -> {!r}", query, parsed_query)
 
     # 벡터 검색: 코사인 거리 기준 최근접 k개 중 MAX_COSINE_DISTANCE(유사도 하한) 이내만 SQL에서 필터링
     query_embedding = embed_query(parsed_query)
@@ -71,13 +73,22 @@ def search_history(query: str, db: Session, limit: int = 50) -> ChatResult | Non
         document_scores[document_id] = max(document_scores.get(document_id, 0.0), score)
 
     if not document_scores:
+        logger.info("search found no match: query={!r} vector_hits={} fts_hits={}", query, len(vector_keys), len(fts_keys))
         return None
 
     # 최고 점수 문서를 조회해 결과로 반환
     top_document_id = max(document_scores, key=lambda document_id: document_scores[document_id])
     document = db.scalar(select(Document).where(Document.document_id == top_document_id))
     if document is None:
+        logger.warning("search matched document_id={} but it no longer exists", top_document_id)
         return None
+
+    logger.info(
+        "search matched: query={!r} document_id={} score={:.4f}",
+        query,
+        top_document_id,
+        document_scores[top_document_id],
+    )
 
     return ChatResult(
         document_id=top_document_id,

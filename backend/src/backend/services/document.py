@@ -1,5 +1,6 @@
 import hashlib
 
+from loguru import logger
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -21,5 +22,10 @@ def save_collected_document(request: CollectRequest, db: Session) -> None:
         )
         .on_conflict_do_nothing(index_elements=[Document.hash])
     )
-    db.execute(stmt)
+    result = db.execute(stmt)
     db.commit()
+
+    if result.rowcount:
+        logger.info("document saved: url={} title={}", request.url, request.title)
+    else:
+        logger.debug("document skipped (duplicate content): url={}", request.url)

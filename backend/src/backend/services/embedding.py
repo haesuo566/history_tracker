@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from loguru import logger
 
 from backend.core.config import settings
 
@@ -18,6 +19,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
 
+    logger.debug("embedding {} text(s) via {}", len(texts), settings.embedding_model)
     response = _get_client().models.embed_content(
         model=settings.embedding_model,
         contents=texts,
