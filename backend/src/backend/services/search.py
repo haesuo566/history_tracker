@@ -12,6 +12,7 @@ from backend.services.tokenizer import extract_nouns
 
 RRF_K = 60
 MAX_COSINE_DISTANCE = 1 - settings.min_cosine_similarity
+DEFAULT_RESULT_COUNT = 5
 
 VECTOR_SEARCH_SQL = text(
     "SELECT document_id, seq, distance FROM vec_chunks "
@@ -33,13 +34,8 @@ def _rrf_merge(*ranked_lists: list[ChunkKey]) -> dict[ChunkKey, float]:
     return scores
 
 
-def search_history(query: str, db: Session, limit: int = 50) -> ChatResult | None:
-    """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 1위 문서를 반환한다."""
-    parsed_query = rewrite_query(query)
-    logger.debug("search query rewritten: {!r} -> {!r}", query, parsed_query)
-
-    # 벡터 검색: 코사인 거리 기준 최근접 k개 중 MAX_COSINE_DISTANCE(유사도 하한) 이내만 SQL에서 필터링
-    query_embedding = embed_query(parsed_query)
+def _vector_search(db: Session, query_embedding: list[float], limit: int) -> list[ChunkKey]:
+    """코사인 거리 기준 최근접 limit개 중 MAX_COSINE_DISTANCE(유사도 하한) 이내만 SQL에서 필터링해 반환한다."""
     vector_hits = db.execute(
         VECTOR_SEARCH_SQL,
         {
@@ -48,51 +44,87 @@ def search_history(query: str, db: Session, limit: int = 50) -> ChatResult | Non
             "max_distance": MAX_COSINE_DISTANCE,
         },
     ).all()
-    vector_keys: list[ChunkKey] = [(document_id, seq) for document_id, seq, _distance in vector_hits]
+    return [(document_id, seq) for document_id, seq, _distance in vector_hits]
 
-    # FTS 검색: query에서 추출한 명사를 OR로 묶어 매칭, 명사 중 실제 본문에 등장한 개수가
-    # required_matches(최소 매칭 단어 수) 미만인 결과는 약한 매칭으로 보고 제외
-    nouns = extract_nouns(parsed_query)
+
+def _fts_search(db: Session, nouns: list[str], limit: int) -> list[ChunkKey]:
+    """명사를 OR로 묶어 매칭하고, 명사 중 실제 본문에 등장한 개수가 required_matches(최소 매칭 단어 수)
+    미만인 결과는 약한 매칭으로 보고 제외한다."""
+    if not nouns:
+        return []
+
+    fts_query = " OR ".join(nouns)
+    fts_hits = db.execute(FTS_SEARCH_SQL, {"query": fts_query, "limit": limit}).all()
+    required_matches = min(settings.min_fts_matched_terms, len(nouns))
+
     fts_keys: list[ChunkKey] = []
-    if nouns:
-        fts_query = " OR ".join(nouns)
-        fts_hits = db.execute(FTS_SEARCH_SQL, {"query": fts_query, "limit": limit}).all()
-        required_matches = min(settings.min_fts_matched_terms, len(nouns))
-        for vector_key, _rank, body in fts_hits:
-            matched_terms = sum(1 for noun in nouns if noun.lower() in body.lower())
-            if matched_terms < required_matches:
-                continue
-            document_id, seq = vector_key.rsplit(":", 1)
-            fts_keys.append((document_id, int(seq)))
+    for vector_key, _rank, body in fts_hits:
+        matched_terms = sum(1 for noun in nouns if noun.lower() in body.lower())
+        if matched_terms < required_matches:
+            continue
+        document_id, seq = vector_key.rsplit(":", 1)
+        fts_keys.append((document_id, int(seq)))
+    return fts_keys
 
-    # 벡터/FTS 순위 목록을 RRF로 병합한 뒤, 청크 점수를 문서 단위로 집계(청크 중 최고 점수를 문서 점수로 사용)
+
+def _merge_document_scores(vector_keys: list[ChunkKey], fts_keys: list[ChunkKey]) -> dict[str, float]:
+    """벡터/FTS 순위 목록을 RRF로 병합한 뒤, 청크 점수를 문서 단위로 집계한다(청크 중 최고 점수를 문서 점수로 사용)."""
     chunk_scores = _rrf_merge(vector_keys, fts_keys)
-
     document_scores: dict[str, float] = {}
     for (document_id, _seq), score in chunk_scores.items():
         document_scores[document_id] = max(document_scores.get(document_id, 0.0), score)
+    return document_scores
 
+
+def _fetch_top_results(db: Session, document_scores: dict[str, float], count: int) -> list[ChatResult]:
+    """점수 상위 count개 문서를 조회해 ChatResult 리스트로 반환한다."""
+    top_document_ids = sorted(document_scores, key=lambda document_id: document_scores[document_id], reverse=True)[
+        :count
+    ]
+    documents_by_id = {
+        document.document_id: document
+        for document in db.scalars(select(Document).where(Document.document_id.in_(top_document_ids)))
+    }
+
+    results = []
+    for document_id in top_document_ids:
+        document = documents_by_id.get(document_id)
+        if document is None:
+            logger.warning("search matched document_id={} but it no longer exists", document_id)
+            continue
+        results.append(
+            ChatResult(
+                document_id=document_id,
+                url=document.url,
+                title=document.title,
+                score=document_scores[document_id],
+            )
+        )
+    return results
+
+
+def search_history(query: str, db: Session, limit: int = 50) -> list[ChatResult]:
+    """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 상위 count개 문서를 반환한다."""
+    parsed = rewrite_query(query)
+    logger.debug("search query rewritten: {!r} -> {!r}", query, parsed.query)
+    count = parsed.desired_count if parsed.desired_count and parsed.desired_count > 0 else DEFAULT_RESULT_COUNT
+
+    query_embedding = embed_query(parsed.query)
+    vector_keys = _vector_search(db, query_embedding, limit)
+
+    nouns = extract_nouns(parsed.query)
+    fts_keys = _fts_search(db, nouns, limit)
+
+    document_scores = _merge_document_scores(vector_keys, fts_keys)
     if not document_scores:
         logger.info("search found no match: query={!r} vector_hits={} fts_hits={}", query, len(vector_keys), len(fts_keys))
-        return None
+        return []
 
-    # 최고 점수 문서를 조회해 결과로 반환
-    top_document_id = max(document_scores, key=lambda document_id: document_scores[document_id])
-    document = db.scalar(select(Document).where(Document.document_id == top_document_id))
-    if document is None:
-        logger.warning("search matched document_id={} but it no longer exists", top_document_id)
-        return None
-
+    results = _fetch_top_results(db, document_scores, count)
     logger.info(
-        "search matched: query={!r} document_id={} score={:.4f}",
+        "search matched {} document(s): query={!r} top_score={:.4f}",
+        len(results),
         query,
-        top_document_id,
-        document_scores[top_document_id],
+        max(document_scores.values()),
     )
-
-    return ChatResult(
-        document_id=top_document_id,
-        url=document.url,
-        title=document.title,
-        score=document_scores[top_document_id],
-    )
+    return results
