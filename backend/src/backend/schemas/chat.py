@@ -13,4 +13,5 @@ class ChatResult(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    result: ChatResult | None
+    result: ChatResult | None = None
+    answer: str | None = None
