@@ -16,6 +16,6 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
 
     if intent == Intent.RECALL:
         results = search_history(request.message, db)
-        return ChatResponse(result=results[0] if results else None)
+        return ChatResponse(results=results)
 
     return ChatResponse(answer=generate_answer(request.message))

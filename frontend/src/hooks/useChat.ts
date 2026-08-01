@@ -67,10 +67,10 @@ export function useChat() {
         throw new Error(detail ?? `요청이 실패했습니다 (${response.status}).`);
       }
 
-      const { result } = (await response.json()) as ChatResponseBody;
+      const { results, answer } = (await response.json()) as ChatResponseBody;
       setMessages((previous) => [
         ...previous,
-        { id: createId(), role: "assistant", result },
+        { id: createId(), role: "assistant", results, answer },
       ]);
     } catch (caught) {
       // 중단은 오류가 아니다. 응답 말풍선을 추가하지 않고 그대로 끝낸다.

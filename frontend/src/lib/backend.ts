@@ -72,20 +72,37 @@ function toSearchResult(raw: Record<string, unknown>): SearchResult | null {
   return { title: title.length > 0 ? title : url, url };
 }
 
-/** POST /chat 으로 질의해 가장 관련 있는 기록 한 건을 받는다. 없으면 null. */
+export interface ChatReply {
+  results: SearchResult[];
+  answer: string | null;
+}
+
+/**
+ * POST /chat 으로 질의한다. recall 의도면 results 에 관련 기록 목록(없으면 빈 배열)이,
+ * 그 외 의도면 answer 에 자유 텍스트 응답이 담겨 온다.
+ */
 export async function searchHistory(
   message: string,
   signal?: AbortSignal,
-): Promise<SearchResult | null> {
+): Promise<ChatReply> {
   const payload = await postJson("/chat", {
     body: { message },
     timeoutMs: SEARCH_TIMEOUT_MS,
     signal,
   });
 
-  const raw = (payload as { result?: unknown }).result;
-  if (raw === null || raw === undefined || typeof raw !== "object") return null;
-  return toSearchResult(raw as Record<string, unknown>);
+  const { results: rawResults, answer: rawAnswer } = payload as Record<string, unknown>;
+
+  const results = Array.isArray(rawResults)
+    ? rawResults
+        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+        .map(toSearchResult)
+        .filter((result): result is SearchResult => result !== null)
+    : [];
+
+  const answer = typeof rawAnswer === "string" && rawAnswer.length > 0 ? rawAnswer : null;
+
+  return { results, answer };
 }
 
 function toCount(value: unknown): number | null {

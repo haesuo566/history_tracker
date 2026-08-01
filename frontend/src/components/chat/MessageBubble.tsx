@@ -87,15 +87,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     );
   }
 
+  const hasAnswer = message.answer !== null;
+  const hasResults = message.results.length > 0;
+
   return (
     <Bubble isUser={false}>
-      {message.result === null ? (
-        <p className="text-zinc-500 dark:text-zinc-400">
-          관련된 검색 기록을 찾지 못했습니다. 다른 표현으로 물어봐 주세요.
-        </p>
-      ) : (
-        <ResultCard result={message.result} />
-      )}
+      <div className="space-y-3">
+        {hasAnswer && <p className="whitespace-pre-wrap break-words">{message.answer}</p>}
+        {hasResults ? (
+          message.results.map((result) => <ResultCard key={result.url} result={result} />)
+        ) : !hasAnswer ? (
+          <p className="text-zinc-500 dark:text-zinc-400">
+            관련된 검색 기록을 찾지 못했습니다. 다른 표현으로 물어봐 주세요.
+          </p>
+        ) : null}
+      </div>
     </Bubble>
   );
 }
