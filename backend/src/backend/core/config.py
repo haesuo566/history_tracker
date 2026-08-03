@@ -10,11 +10,11 @@ class Settings(BaseSettings):
     embedding_dim: int = 3072
     gemini_api_key: str
     embedding_model: str = "gemini-embedding-001"
-    query_rewrite_model: str = "gemini-3.5-flash"
-    intent_classify_model: str = "gemini-3.5-flash"
-    answer_model: str = "gemini-3.5-flash"
-    min_cosine_similarity: float = 0.4
-    min_fts_matched_terms: int = 2
+    query_rewrite_model: str = "gemini-3.5-flash-lite"
+    intent_classify_model: str = "gemini-3.5-flash-lite"
+    answer_model: str = "gemini-3.5-flash-lite"
+    min_cosine_similarity: float = 0.5
+    min_fts_matched_terms: int = 1
 
 
 settings = Settings()
