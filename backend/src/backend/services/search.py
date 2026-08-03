@@ -4,6 +4,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
+from backend.models.chunk import Chunk
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
 from backend.services.embedding import embed_query
@@ -67,23 +68,29 @@ def _fts_search(db: Session, nouns: list[str], limit: int) -> list[ChunkKey]:
     return fts_keys
 
 
-def _merge_document_scores(vector_keys: list[ChunkKey], fts_keys: list[ChunkKey]) -> dict[str, float]:
-    """벡터/FTS 순위 목록을 RRF로 병합한 뒤, 청크 점수를 문서 단위로 집계한다(청크 중 최고 점수를 문서 점수로 사용)."""
+def _merge_document_scores(vector_keys: list[ChunkKey], fts_keys: list[ChunkKey]) -> dict[str, tuple[float, int]]:
+    """벡터/FTS 순위 목록을 RRF로 병합한 뒤, 문서 단위로 최고 점수와 그 점수를 낸 청크의 seq를 집계한다."""
     chunk_scores = _rrf_merge(vector_keys, fts_keys)
-    document_scores: dict[str, float] = {}
-    for (document_id, _seq), score in chunk_scores.items():
-        document_scores[document_id] = max(document_scores.get(document_id, 0.0), score)
-    return document_scores
+    document_best: dict[str, tuple[float, int]] = {}
+    for (document_id, seq), score in chunk_scores.items():
+        best = document_best.get(document_id)
+        if best is None or score > best[0]:
+            document_best[document_id] = (score, seq)
+    return document_best
 
 
-def _fetch_top_results(db: Session, document_scores: dict[str, float], count: int) -> list[ChatResult]:
-    """점수 상위 count개 문서를 조회해 ChatResult 리스트로 반환한다."""
-    top_document_ids = sorted(document_scores, key=lambda document_id: document_scores[document_id], reverse=True)[
+def _fetch_top_results(db: Session, document_best: dict[str, tuple[float, int]], count: int) -> list[ChatResult]:
+    """점수 상위 count개 문서를 조회해, 최고 점수를 낸 청크 구간으로 본문을 잘라 ChatResult 리스트로 반환한다."""
+    top_document_ids = sorted(document_best, key=lambda document_id: document_best[document_id][0], reverse=True)[
         :count
     ]
     documents_by_id = {
         document.document_id: document
         for document in db.scalars(select(Document).where(Document.document_id.in_(top_document_ids)))
+    }
+    chunks_by_key = {
+        (chunk.document_id, chunk.seq): chunk
+        for chunk in db.scalars(select(Chunk).where(Chunk.document_id.in_(top_document_ids)))
     }
 
     results = []
@@ -92,12 +99,16 @@ def _fetch_top_results(db: Session, document_scores: dict[str, float], count: in
         if document is None:
             logger.warning("search matched document_id={} but it no longer exists", document_id)
             continue
+        score, seq = document_best[document_id]
+        chunk = chunks_by_key.get((document_id, seq))
+        snippet = document.full_text[chunk.char_start : chunk.char_end] if chunk else ""
         results.append(
             ChatResult(
                 document_id=document_id,
                 url=document.url,
                 title=document.title,
-                score=document_scores[document_id],
+                score=score,
+                snippet=snippet,
             )
         )
     return results
@@ -115,16 +126,16 @@ def search_history(query: str, db: Session, limit: int = 50) -> list[ChatResult]
     nouns = extract_nouns(parsed.query)
     fts_keys = _fts_search(db, nouns, limit)
 
-    document_scores = _merge_document_scores(vector_keys, fts_keys)
-    if not document_scores:
+    document_best = _merge_document_scores(vector_keys, fts_keys)
+    if not document_best:
         logger.info("search found no match: query={!r} vector_hits={} fts_hits={}", query, len(vector_keys), len(fts_keys))
         return []
 
-    results = _fetch_top_results(db, document_scores, count)
+    results = _fetch_top_results(db, document_best, count)
     logger.info(
         "search matched {} document(s): query={!r} top_score={:.4f}",
         len(results),
         query,
-        max(document_scores.values()),
+        max(score for score, _seq in document_best.values()),
     )
     return results

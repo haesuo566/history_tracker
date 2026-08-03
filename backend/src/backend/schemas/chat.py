@@ -10,6 +10,7 @@ class ChatResult(BaseModel):
     url: str
     title: str
     score: float
+    snippet: str
 
 
 class ChatResponse(BaseModel):

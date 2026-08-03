@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.session import get_db
 from backend.schemas.chat import ChatRequest, ChatResponse
-from backend.services.answer import generate_answer
+from backend.services.answer import generate_answer, generate_recall_answer
 from backend.services.intent import Intent, classify_intent
 from backend.services.search import search_history
 
@@ -16,6 +16,7 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
 
     if intent == Intent.RECALL:
         results = search_history(request.message, db)
-        return ChatResponse(results=results)
+        answer = generate_recall_answer(request.message, results)
+        return ChatResponse(results=results, answer=answer)
 
     return ChatResponse(answer=generate_answer(request.message))
