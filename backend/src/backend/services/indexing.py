@@ -30,7 +30,7 @@ def run_indexing_batch(db: Session) -> BatchResponse:
                 document.checked = True
 
                 if chunks:
-                    embeddings = embed_texts([chunk.text for chunk in chunks])
+                    embeddings = embed_texts([f"{document.title}\n{chunk.text}" for chunk in chunks])
                     for seq, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
                         db.add(
                             Chunk(
