@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     answer_model: str = "gemini-3.5-flash-lite"
     min_cosine_similarity: float = 0.5
     min_fts_matched_terms: int = 1
+    chat_history_messages: int = 10
 
 
 settings = Settings()

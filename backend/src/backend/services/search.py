@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import sqlite_vec
 from loguru import logger
 from sqlalchemy import select, text
@@ -5,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.core.config import settings
 from backend.models.chunk import Chunk
+from backend.models.conversation import Message
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
 from backend.services.embedding import embed_query
@@ -114,9 +117,14 @@ def _fetch_top_results(db: Session, document_best: dict[str, tuple[float, int]],
     return results
 
 
-def search_history(query: str, db: Session, limit: int = 50) -> list[ChatResult]:
-    """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 상위 count개 문서를 반환한다."""
-    parsed = rewrite_query(query)
+def search_history(
+    query: str, db: Session, limit: int = 50, history: Sequence[Message] = ()
+) -> list[ChatResult]:
+    """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 상위 count개 문서를 반환한다.
+
+    history는 질의 재작성 단계에만 쓰인다. 지시 표현이 풀린 검색어로 검색해야 후속 질문이 맞는다.
+    """
+    parsed = rewrite_query(query, history)
     logger.debug("search query rewritten: {!r} -> {!r}", query, parsed.query)
     count = parsed.desired_count if parsed.desired_count and parsed.desired_count > 0 else DEFAULT_RESULT_COUNT
 
