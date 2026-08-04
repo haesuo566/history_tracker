@@ -21,6 +21,11 @@ export function useChat() {
   const [error, setError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * 이어가는 중인 대화. 서버가 발급한 값을 응답마다 받아서 갱신한다.
+   * 렌더링에 쓰이지 않고 send 안에서만 읽으므로, 의존성 때문에 값이 낡지 않도록 state 가 아닌 ref 로 둔다.
+   */
+  const conversationIdRef = useRef<string | null>(null);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -31,6 +36,8 @@ export function useChat() {
   const reset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    // id 를 버리면 다음 요청에서 서버가 새 대화를 시작한다. 이전 대화는 서버에 그대로 남는다.
+    conversationIdRef.current = null;
     setMessages([]);
     setError(null);
     setStatus("idle");
@@ -51,7 +58,10 @@ export function useChat() {
     abortRef.current = controller;
 
     try {
-      const requestBody: ChatRequestBody = { message: text };
+      const requestBody: ChatRequestBody = {
+        message: text,
+        conversation_id: conversationIdRef.current,
+      };
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -67,7 +77,13 @@ export function useChat() {
         throw new Error(detail ?? `요청이 실패했습니다 (${response.status}).`);
       }
 
-      const { results, answer } = (await response.json()) as ChatResponseBody;
+      const { conversation_id, results, answer } = (await response.json()) as ChatResponseBody;
+
+      // 응답을 기다리는 사이 reset() 이 이 요청을 무효화했으면, 비운 화면에 답변을 되살리거나
+      // 버린 대화의 id 를 복구해서는 안 된다.
+      if (abortRef.current !== controller) return;
+
+      conversationIdRef.current = conversation_id;
       setMessages((previous) => [
         ...previous,
         { id: createId(), role: "assistant", results, answer },

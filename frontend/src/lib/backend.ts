@@ -73,6 +73,7 @@ function toSearchResult(raw: Record<string, unknown>): SearchResult | null {
 }
 
 export interface ChatReply {
+  conversationId: string;
   results: SearchResult[];
   answer: string | null;
 }
@@ -80,18 +81,29 @@ export interface ChatReply {
 /**
  * POST /chat 으로 질의한다. recall 의도면 results 에 관련 기록 목록(없으면 빈 배열)이,
  * 그 외 의도면 answer 에 자유 텍스트 응답이 담겨 온다.
+ * conversationId 를 넘기면 그 대화를 이어가고, null 이면 새 대화가 시작된다.
  */
 export async function searchHistory(
   message: string,
+  conversationId: string | null,
   signal?: AbortSignal,
 ): Promise<ChatReply> {
   const payload = await postJson("/chat", {
-    body: { message },
+    body: { message, conversation_id: conversationId },
     timeoutMs: SEARCH_TIMEOUT_MS,
     signal,
   });
 
-  const { results: rawResults, answer: rawAnswer } = payload as Record<string, unknown>;
+  const {
+    conversation_id: rawConversationId,
+    results: rawResults,
+    answer: rawAnswer,
+  } = payload as Record<string, unknown>;
+
+  // id 를 못 받으면 다음 질문이 조용히 새 대화로 시작돼 맥락이 끊긴다. 조용히 넘기지 않는다.
+  if (typeof rawConversationId !== "string" || rawConversationId.length === 0) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
 
   const results = Array.isArray(rawResults)
     ? rawResults
@@ -102,7 +114,7 @@ export async function searchHistory(
 
   const answer = typeof rawAnswer === "string" && rawAnswer.length > 0 ? rawAnswer : null;
 
-  return { results, answer };
+  return { conversationId: rawConversationId, results, answer };
 }
 
 function toCount(value: unknown): number | null {
