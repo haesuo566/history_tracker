@@ -9,6 +9,9 @@ const SEARCH_TIMEOUT_MS = 30_000;
 /** 미처리 문서 전체를 청크로 나눠 임베딩하므로 분 단위로 걸릴 수 있다. */
 const BATCH_TIMEOUT_MS = 10 * 60_000;
 
+/** 대화 목록/조회/삭제는 단순 DB 조회라 오래 걸릴 이유가 없다. */
+const CONVERSATION_TIMEOUT_MS = 10_000;
+
 /** 백엔드 호출 실패를 사용자에게 보여줄 문구와 함께 전달한다. */
 export class BackendError extends Error {
   constructor(message: string) {
@@ -17,20 +20,30 @@ export class BackendError extends Error {
   }
 }
 
+interface RequestOptions {
+  method: "GET" | "POST" | "DELETE";
+  body?: unknown;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  /** 404 를 오류로 던지지 않고 null 로 돌려준다(예: 모르는 conversation_id 조회/삭제). */
+  treatNotFoundAsNull?: boolean;
+}
+
 /**
- * 백엔드로 POST 하고 JSON 을 돌려준다.
+ * 백엔드에 요청하고 JSON 을 돌려준다.
  * body 를 생략하면 본문 없이 보낸다(예: /batch 는 요청 값이 없다).
+ * 응답 본문이 없는 204 는 undefined 를, treatNotFoundAsNull 인 404 는 null 을 돌려준다.
  */
-async function postJson(
+async function request(
   path: string,
-  { body, timeoutMs, signal }: { body?: unknown; timeoutMs: number; signal?: AbortSignal },
+  { method, body, timeoutMs, signal, treatNotFoundAsNull }: RequestOptions,
 ): Promise<unknown> {
   const timeout = AbortSignal.timeout(timeoutMs);
 
   let response: Response;
   try {
     response = await fetch(`${BASE_URL}${path}`, {
-      method: "POST",
+      method,
       ...(body === undefined
         ? {}
         : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
@@ -48,8 +61,14 @@ async function postJson(
     );
   }
 
+  if (response.status === 404 && treatNotFoundAsNull === true) {
+    return null;
+  }
   if (!response.ok) {
     throw new BackendError(`백엔드가 오류를 반환했습니다 (${response.status}).`);
+  }
+  if (response.status === 204) {
+    return undefined;
   }
 
   try {
@@ -57,6 +76,17 @@ async function postJson(
   } catch {
     throw new BackendError("백엔드 응답을 해석할 수 없습니다.");
   }
+}
+
+/**
+ * 백엔드로 POST 하고 JSON 을 돌려준다.
+ * body 를 생략하면 본문 없이 보낸다(예: /batch 는 요청 값이 없다).
+ */
+async function postJson(
+  path: string,
+  { body, timeoutMs, signal }: { body?: unknown; timeoutMs: number; signal?: AbortSignal },
+): Promise<unknown> {
+  return request(path, { method: "POST", body, timeoutMs, signal });
 }
 
 /**
@@ -133,4 +163,90 @@ export async function runBatch(signal?: AbortSignal): Promise<BatchSummary> {
 
   const [a, s, f] = counts as number[];
   return { attempted: a, succeeded: s, failed: f };
+}
+
+export interface ConversationSummaryItem {
+  conversationId: string;
+  /** 메시지가 없는 대화는 제목이 없다. */
+  title: string | null;
+}
+
+/**
+ * 백엔드 ConversationSummary 에는 message_count, created_at, last_message_at 도 있지만
+ * 사이드바 목록에서 쓰지 않으므로 이 경계에서 버린다.
+ */
+function toConversationSummary(raw: Record<string, unknown>): ConversationSummaryItem | null {
+  const { conversation_id: conversationId, title } = raw;
+  if (typeof conversationId !== "string" || conversationId.length === 0) return null;
+  return { conversationId, title: typeof title === "string" ? title : null };
+}
+
+/** GET /conversations 로 대화 목록을 최근 활동 순으로 받는다. */
+export async function listConversations(signal?: AbortSignal): Promise<ConversationSummaryItem[]> {
+  const payload = await request("/conversations", {
+    method: "GET",
+    timeoutMs: CONVERSATION_TIMEOUT_MS,
+    signal,
+  });
+
+  const { conversations } = payload as Record<string, unknown>;
+  if (!Array.isArray(conversations)) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
+
+  return conversations
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map(toConversationSummary)
+    .filter((item): item is ConversationSummaryItem => item !== null);
+}
+
+export interface ConversationMessageItem {
+  role: "user" | "assistant";
+  content: string;
+}
+
+function toConversationMessage(raw: Record<string, unknown>): ConversationMessageItem | null {
+  const { role, content } = raw;
+  if (role !== "user" && role !== "assistant") return null;
+  if (typeof content !== "string") return null;
+  return { role, content };
+}
+
+/**
+ * GET /conversations/{id} 로 대화 전문을 받는다. 모르는 id 면 null.
+ * 과거 assistant 메시지는 Gemini 가 생성한 답변 문장만 저장돼 있고 검색 결과(title/url)는
+ * DB에 남지 않으므로, 다시 불러온 assistant 메시지에는 결과 카드가 없다.
+ */
+export async function getConversation(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ConversationMessageItem[] | null> {
+  const payload = await request(`/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "GET",
+    timeoutMs: CONVERSATION_TIMEOUT_MS,
+    signal,
+    treatNotFoundAsNull: true,
+  });
+  if (payload === null) return null;
+
+  const { messages } = payload as Record<string, unknown>;
+  if (!Array.isArray(messages)) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
+
+  return messages
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map(toConversationMessage)
+    .filter((item): item is ConversationMessageItem => item !== null);
+}
+
+/** DELETE /conversations/{id} 로 대화를 지운다. 이미 없는 대화면 false. */
+export async function deleteConversation(conversationId: string, signal?: AbortSignal): Promise<boolean> {
+  const result = await request(`/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "DELETE",
+    timeoutMs: CONVERSATION_TIMEOUT_MS,
+    signal,
+    treatNotFoundAsNull: true,
+  });
+  return result !== null;
 }

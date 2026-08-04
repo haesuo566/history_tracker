@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 
-import type { ChatStatus } from "@/hooks/useChat";
+import type { ChatStatus } from "@/hooks/useChatSessions";
 
 interface ChatInputProps {
   value: string;
@@ -43,7 +43,7 @@ export function ChatInput({ value, status, onChange, onSubmit, onStop }: ChatInp
       }}
       className="mx-auto w-full max-w-3xl px-4 pb-4"
     >
-      <div className="flex items-end gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-sm focus-within:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:focus-within:border-zinc-600">
+      <div className="flex items-end gap-2 rounded-2xl border border-zinc-200 bg-white p-2 shadow-lg shadow-zinc-200/60 transition-shadow focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 dark:border-zinc-800 dark:bg-zinc-900 dark:shadow-none dark:focus-within:border-blue-800 dark:focus-within:ring-blue-950/40">
         <textarea
           ref={textareaRef}
           rows={1}
@@ -67,7 +67,7 @@ export function ChatInput({ value, status, onChange, onSubmit, onStop }: ChatInp
           <button
             type="submit"
             disabled={!canSubmit}
-            className="shrink-0 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+            className="shrink-0 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-blue-600/25 transition-all hover:shadow-md hover:shadow-blue-600/35 hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none disabled:hover:brightness-100"
           >
             보내기
           </button>

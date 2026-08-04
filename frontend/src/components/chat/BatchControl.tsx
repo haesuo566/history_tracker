@@ -43,7 +43,7 @@ export function BatchButton({ status, onRun }: BatchButtonProps) {
       onClick={onRun}
       disabled={isRunning}
       aria-busy={isRunning}
-      className="flex items-center gap-1.5 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
+      className="flex items-center gap-1.5 rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-blue-900/60 dark:hover:bg-blue-950/30 dark:hover:text-blue-300"
     >
       {isRunning && <Spinner />}
       {isRunning ? `${BATCH_LABEL} 중…` : BATCH_LABEL}

@@ -46,3 +46,25 @@ export interface BatchSummary {
   succeeded: number;
   failed: number;
 }
+
+/** 사이드바 목록 한 줄. GET /api/conversations 응답 본문의 원소다. */
+export interface ConversationListItem {
+  conversation_id: string;
+  /** 메시지가 없는 대화는 제목이 없다(생성만 하고 쓰지 않은 경우). */
+  title: string | null;
+}
+
+/** GET /api/conversations 응답 본문. */
+export interface ConversationListBody {
+  conversations: ConversationListItem[];
+}
+
+/**
+ * GET /api/conversations/{id} 응답 본문.
+ * 백엔드는 과거 assistant 메시지의 검색 결과(title/url)를 저장하지 않고 답변 문장만 남기므로,
+ * 다시 불러온 대화의 assistant 메시지에는 결과 카드 없이 텍스트만 있다.
+ */
+export interface ConversationDetailBody {
+  conversation_id: string;
+  messages: { role: string; content: string }[];
+}

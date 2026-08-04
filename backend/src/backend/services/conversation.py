@@ -1,9 +1,19 @@
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from backend.core.config import settings
-from backend.models.conversation import Conversation, Message, MessageRole
+from backend.models.conversation import (
+    TITLE_MAX_CHARS,
+    Conversation,
+    Message,
+    MessageRole,
+)
+from backend.schemas.conversation import (
+    ConversationDetail,
+    ConversationMessage,
+    ConversationSummary,
+)
 
 
 def ensure_conversation(conversation_id: str | None, db: Session) -> str:
@@ -13,8 +23,7 @@ def ensure_conversation(conversation_id: str | None, db: Session) -> str:
     응답으로 새 id를 돌려주므로, 클라이언트는 받은 값으로 갱신하면 대화가 이어진다.
     """
     if conversation_id is not None:
-        existing = db.scalar(select(Conversation).where(Conversation.conversation_id == conversation_id))
-        if existing is not None:
+        if load_conversation(conversation_id, db) is not None:
             return conversation_id
         logger.warning("unknown conversation_id={!r}, starting a new conversation instead", conversation_id)
 
@@ -28,8 +37,20 @@ def ensure_conversation(conversation_id: str | None, db: Session) -> str:
 
 
 def append_message(conversation_id: str, role: MessageRole, content: str, db: Session) -> None:
-    """대화에 메시지 한 건을 덧붙인다."""
+    """대화에 메시지 한 건을 덧붙인다.
+
+    role이 user이면 title도 함께 확정을 시도한다. title이 이미 있으면 WHERE 조건에 걸려 UPDATE가
+    아무 일도 하지 않으므로, 여러 번 불려도 대화의 첫 user 메시지로만 채워진다.
+    """
     db.add(Message(conversation_id=conversation_id, role=role, content=content))
+    if role == MessageRole.USER:
+        title = _as_title(content)
+        if title is not None:
+            db.execute(
+                update(Conversation)
+                .where(Conversation.conversation_id == conversation_id, Conversation.title.is_(None))
+                .values(title=title)
+            )
     db.commit()
     logger.debug("message appended: conversation_id={} role={} chars={}", conversation_id, role, len(content))
 
@@ -51,3 +72,115 @@ def load_recent_messages(conversation_id: str, db: Session, limit: int | None = 
         .limit(limit)
     ).all()
     return list(reversed(recent))
+
+
+def load_conversation(conversation_id: str, db: Session) -> Conversation | None:
+    """대화 행 자체를 반환한다. 모르는 id면 None."""
+    return db.scalar(select(Conversation).where(Conversation.conversation_id == conversation_id))
+
+
+def load_all_messages(conversation_id: str, db: Session) -> list[Message]:
+    """대화의 모든 메시지를 오래된 것부터 시간순으로 반환한다."""
+    messages = db.scalars(
+        select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id)
+    ).all()
+    return list(messages)
+
+
+def delete_conversation(conversation_id: str, db: Session) -> bool:
+    """대화와 그 메시지를 모두 지운다. 모르는 id면 아무것도 하지 않고 False.
+
+    Message.conversation_id는 FK로 선언돼 있지만 SQLite는 PRAGMA foreign_keys=ON 없이는 이를
+    강제하지 않고 session.py도 그 설정을 켜지 않는다. 그래서 messages를 여기서 먼저 명시적으로
+    지운다 — 안 지우면 고아 행으로 남아 조회는 안 돼도 자리만 차지한다.
+    """
+    conversation = load_conversation(conversation_id, db)
+    if conversation is None:
+        return False
+
+    db.execute(delete(Message).where(Message.conversation_id == conversation_id))
+    db.delete(conversation)
+    db.commit()
+    logger.info("conversation deleted: conversation_id={}", conversation_id)
+    return True
+
+
+def load_conversation_detail(conversation_id: str, db: Session) -> ConversationDetail | None:
+    """대화 한 건의 전문을 반환한다. 모르는 id면 None.
+
+    load_recent_messages와 달리 잘라내지 않는다. 대화를 화면에 되살리는 용도라 전부 필요하다.
+    """
+    conversation = load_conversation(conversation_id, db)
+    if conversation is None:
+        return None
+
+    return ConversationDetail(
+        conversation_id=conversation.conversation_id,
+        created_at=conversation.created_at,
+        messages=[
+            ConversationMessage(role=message.role, content=message.content, created_at=message.created_at)
+            for message in load_all_messages(conversation_id, db)
+        ],
+    )
+
+
+def list_conversations(db: Session, limit: int) -> list[ConversationSummary]:
+    """대화 목록을 최근 활동 순으로 최대 limit건 반환한다.
+
+    title은 append_message가 채워둔 값을 그대로 읽는다. message_count·last_message_at은 컬럼으로
+    두지 않았으므로 여전히 messages를 집계해 구한다.
+    """
+    activity = (
+        select(
+            Message.conversation_id.label("conversation_id"),
+            func.count().label("message_count"),
+            func.max(Message.created_at).label("last_message_at"),
+            func.max(Message.id).label("last_message_id"),
+        )
+        .group_by(Message.conversation_id)
+        .subquery()
+    )
+
+    rows = db.execute(
+        select(
+            Conversation.conversation_id,
+            Conversation.title,
+            Conversation.created_at,
+            func.coalesce(activity.c.message_count, 0).label("message_count"),
+            activity.c.last_message_at,
+        )
+        .outerjoin(activity, activity.c.conversation_id == Conversation.conversation_id)
+        # 메시지가 없는 대화는 정렬할 활동 시각이 없어 생성 시각으로 대신한다. 두 시각 모두 초
+        # 단위라 같은 초에 몰린 대화끼리는 갈리지 않으므로, 단조 증가하는 id를 뒤 기준으로 둔다.
+        .order_by(
+            func.coalesce(activity.c.last_message_at, Conversation.created_at).desc(),
+            func.coalesce(activity.c.last_message_id, 0).desc(),
+            Conversation.id.desc(),
+        )
+        .limit(limit)
+    ).all()
+
+    return [
+        ConversationSummary(
+            conversation_id=row.conversation_id,
+            title=row.title,
+            message_count=row.message_count,
+            created_at=row.created_at,
+            last_message_at=row.last_message_at,
+        )
+        for row in rows
+    ]
+
+
+def _as_title(first_question: str) -> str | None:
+    """첫 질문을 title 컬럼에 넣을 한 줄로 줄인다.
+
+    본문 전체를 저장하지 않기 위해 여기서 자른다(컬럼 길이도 이에 맞춰져 있다). 개행은 한 줄로
+    접는다. 접은 결과가 빈 문자열이면(공백뿐인 메시지) None을 돌려줘 title을 채우지 않는다.
+    """
+    title = " ".join(first_question.split())
+    if not title:
+        return None
+    if len(title) <= TITLE_MAX_CHARS:
+        return title
+    return title[:TITLE_MAX_CHARS].rstrip() + "…"

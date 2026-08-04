@@ -12,20 +12,20 @@ function Bubble({ isUser, children }: { isUser: boolean; children: React.ReactNo
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
       <div
         aria-hidden
-        className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold select-none ${
+        className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white shadow-sm select-none ${
           isUser
-            ? "bg-blue-600 text-white"
-            : "bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200"
+            ? "bg-gradient-to-br from-blue-600 to-indigo-600 shadow-blue-600/30"
+            : "bg-gradient-to-br from-zinc-700 to-zinc-900 shadow-zinc-900/20 dark:from-zinc-600 dark:to-zinc-800"
         }`}
       >
         {isUser ? "나" : "AI"}
       </div>
 
       <div
-        className={`min-w-0 max-w-[min(46rem,85%)] rounded-2xl px-4 py-3 text-[15px] leading-relaxed ${
+        className={`min-w-0 max-w-[min(46rem,85%)] rounded-2xl px-4 py-3 text-[15px] leading-relaxed shadow-sm ${
           isUser
-            ? "rounded-tr-sm bg-blue-600 text-white"
-            : "rounded-tl-sm bg-zinc-100 text-zinc-900 dark:bg-zinc-800/80 dark:text-zinc-100"
+            ? "rounded-tr-sm bg-gradient-to-br from-blue-600 to-indigo-600 text-white"
+            : "rounded-tl-sm bg-white text-zinc-900 ring-1 ring-zinc-200/70 dark:bg-zinc-800/80 dark:text-zinc-100 dark:ring-zinc-700/60"
         }`}
       >
         {children}

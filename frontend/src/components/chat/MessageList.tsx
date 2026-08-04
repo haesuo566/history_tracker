@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { MessageBubble, PendingBubble } from "@/components/chat/MessageBubble";
 import type { ChatMessage } from "@/lib/types";
-import type { ChatStatus } from "@/hooks/useChat";
+import type { ChatStatus } from "@/hooks/useChatSessions";
 
 interface MessageListProps {
   messages: ChatMessage[];
@@ -26,7 +26,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-6 px-4 text-center">
       <div className="space-y-2">
-        <h2 className="text-2xl font-semibold tracking-tight">
+        <h2 className="bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-2xl font-semibold tracking-tight text-transparent">
           기억나는 대로 물어보세요
         </h2>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -39,7 +39,7 @@ function EmptyState({ onPick }: { onPick: (text: string) => void }) {
             key={suggestion}
             type="button"
             onClick={() => onPick(suggestion)}
-            className="rounded-xl border border-zinc-200 px-4 py-3 text-left text-sm text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+            className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-left text-sm text-zinc-700 shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-blue-900/60"
           >
             {suggestion}
           </button>
@@ -72,7 +72,7 @@ export function MessageList({ messages, status, onPickSuggestion }: MessageListP
     <div
       ref={scrollRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto overscroll-contain"
+      className="flex-1 overflow-y-auto overscroll-contain bg-gradient-to-b from-zinc-50/60 to-transparent dark:from-zinc-950/40"
     >
       {messages.length === 0 ? (
         <EmptyState onPick={onPickSuggestion} />
