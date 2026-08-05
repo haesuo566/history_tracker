@@ -14,11 +14,19 @@
                 "--reload"
             ],
             "cwd": "${workspaceFolder}/backend",
-            "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/backend/src"
             },
-            "jinja": true
+            "jinja": true,
+            "windows": {
+                "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+            },
+            "linux": {
+                "python": "${workspaceFolder}/backend/.venv/bin/python"
+            },
+            "osx": {
+                "python": "${workspaceFolder}/backend/.venv/bin/python"
+            }
         }
     ]
 }
