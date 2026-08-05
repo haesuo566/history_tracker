@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import type { ChatSession } from "@/hooks/useChatSessions";
 
 interface ChatSidebarProps {
@@ -10,6 +12,7 @@ interface ChatSidebarProps {
   sessionsError: string | null;
   onSelect: (id: string) => void;
   onCreate: () => void;
+  onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
   onRetry: () => void;
@@ -50,6 +53,21 @@ function PlusIcon() {
   );
 }
 
+function PencilIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5">
+      <path
+        d="M11 2.5 13.5 5 5 13.5 2 14l.5-3L11 2.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function TrashIcon() {
   return (
     <svg aria-hidden viewBox="0 0 16 16" className="size-3.5">
@@ -73,10 +91,24 @@ export function ChatSidebar({
   sessionsError,
   onSelect,
   onCreate,
+  onRename,
   onDelete,
   onClose,
   onRetry,
 }: ChatSidebarProps) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState("");
+
+  function startEditing(session: ChatSession) {
+    setEditingId(session.id);
+    setEditingValue(session.title);
+  }
+
+  function commitEditing() {
+    if (editingId !== null) onRename(editingId, editingValue);
+    setEditingId(null);
+  }
+
   return (
     <>
       {isOpen && (
@@ -144,38 +176,68 @@ export function ChatSidebar({
             <ul className="space-y-0.5">
               {!isLoadingSessions && sessions.map((session) => {
                 const isActive = session.id === activeSessionId;
+                const isEditing = editingId === session.id;
                 return (
                   <li key={session.id} className="group relative">
-                    <button
-                      type="button"
-                      onClick={() => onSelect(session.id)}
-                      aria-current={isActive}
-                      className={`flex w-full items-center gap-2 rounded-lg border-l-2 px-3 py-2 pr-8 text-left text-sm transition-colors ${
-                        isActive
-                          ? "border-blue-600 bg-white text-zinc-900 shadow-sm dark:bg-zinc-800/90 dark:text-zinc-100"
-                          : "border-transparent text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900/60"
-                      }`}
-                    >
-                      {session.status === "loading" && (
-                        <span
-                          aria-hidden
-                          className="size-1.5 shrink-0 animate-pulse rounded-full bg-blue-500"
-                        />
-                      )}
-                      <span className="truncate">{session.title}</span>
-                    </button>
+                    {isEditing ? (
+                      <input
+                        autoFocus
+                        value={editingValue}
+                        onChange={(event) => setEditingValue(event.target.value)}
+                        onBlur={commitEditing}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") commitEditing();
+                          if (event.key === "Escape") setEditingId(null);
+                        }}
+                        className="w-full rounded-lg border-l-2 border-blue-600 bg-white px-3 py-2 text-sm text-zinc-900 outline-none dark:bg-zinc-800/90 dark:text-zinc-100"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onSelect(session.id)}
+                        aria-current={isActive}
+                        className={`flex w-full items-center gap-2 rounded-lg border-l-2 px-3 py-2 pr-14 text-left text-sm transition-colors ${
+                          isActive
+                            ? "border-blue-600 bg-white text-zinc-900 shadow-sm dark:bg-zinc-800/90 dark:text-zinc-100"
+                            : "border-transparent text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900/60"
+                        }`}
+                      >
+                        {session.status === "loading" && (
+                          <span
+                            aria-hidden
+                            className="size-1.5 shrink-0 animate-pulse rounded-full bg-blue-500"
+                          />
+                        )}
+                        <span className="truncate">{session.title}</span>
+                      </button>
+                    )}
 
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDelete(session.id);
-                      }}
-                      aria-label={`${session.title} 대화 삭제`}
-                      className="absolute inset-y-0 right-1 flex items-center rounded-md px-1.5 text-zinc-400 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-500 focus-visible:opacity-100 dark:hover:text-red-400"
-                    >
-                      <TrashIcon />
-                    </button>
+                    {!isEditing && (
+                      <div className="absolute inset-y-0 right-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            startEditing(session);
+                          }}
+                          aria-label={`${session.title} 대화 이름 바꾸기`}
+                          className="flex items-center rounded-md px-1.5 py-1.5 text-zinc-400 hover:text-blue-600 focus-visible:opacity-100 dark:hover:text-blue-400"
+                        >
+                          <PencilIcon />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onDelete(session.id);
+                          }}
+                          aria-label={`${session.title} 대화 삭제`}
+                          className="flex items-center rounded-md px-1.5 py-1.5 text-zinc-400 hover:text-red-500 focus-visible:opacity-100 dark:hover:text-red-400"
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    )}
                   </li>
                 );
               })}

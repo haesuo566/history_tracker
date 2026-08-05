@@ -119,10 +119,22 @@ export function useChatSessions() {
     fetchSessions(new AbortController().signal);
   }, [fetchSessions]);
 
+  // 아직 메시지를 하나도 보내지 않은(=백엔드 conversation 이 없는) 빈 대화는 동시에 하나만 둔다.
+  // 목록 조회로만 알고 있는 세션(loaded=false)도 메시지 배열이 비어 있지만, conversationIdsRef 에
+  // 매핑이 있으므로 draft 로 오인하지 않는다.
   const createSession = useCallback(() => {
-    const fresh = createEmptySession();
-    setSessions((previous) => [fresh, ...previous]);
-    setActiveSessionId(fresh.id);
+    setSessions((previous) => {
+      const existingDraft = previous.find(
+        (session) => session.messages.length === 0 && !conversationIdsRef.current.has(session.id),
+      );
+      if (existingDraft !== undefined) {
+        setActiveSessionId(existingDraft.id);
+        return previous;
+      }
+      const fresh = createEmptySession();
+      setActiveSessionId(fresh.id);
+      return [fresh, ...previous];
+    });
   }, []);
 
   /** 목록 조회로만 알고 있던 세션을 고르면, 이때 처음으로 메시지 전문을 불러온다. */
@@ -170,6 +182,27 @@ export function useChatSessions() {
     },
     [sessions, hydrateSession],
   );
+
+  const renameSession = useCallback((id: string, rawTitle: string) => {
+    const title = rawTitle.trim();
+    if (title.length === 0) return;
+
+    setSessions((previous) =>
+      previous.map((session) => (session.id === id ? { ...session, title } : session)),
+    );
+
+    const conversationId = conversationIdsRef.current.get(id);
+    // 아직 첫 메시지를 보내지 않은 draft 는 백엔드에 없으므로 로컬 상태만 바꾸면 된다.
+    if (conversationId === undefined) return;
+
+    fetch(`/api/conversations/${conversationId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    }).catch((caught) => {
+      console.error("[useChatSessions] failed to rename conversation", conversationId, caught);
+    });
+  }, []);
 
   const deleteSession = useCallback(
     (id: string) => {
@@ -285,6 +318,7 @@ export function useChatSessions() {
     retryLoadSessions,
     createSession,
     selectSession,
+    renameSession,
     deleteSession,
     messages: activeSession.messages,
     status: activeSession.status,

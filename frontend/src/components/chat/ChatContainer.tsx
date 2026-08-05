@@ -28,6 +28,7 @@ export function ChatContainer() {
     retryLoadSessions,
     createSession,
     selectSession,
+    renameSession,
     deleteSession,
     messages,
     status,
@@ -47,14 +48,20 @@ export function ChatContainer() {
     void send(text);
   }
 
+  // 사이드바는 모바일에서는 화면을 덮는 오버레이라 선택 후 닫아야 하지만,
+  // 데스크톱(md 이상)에서는 항상 보이는 패널이므로 열린 상태를 유지한다.
+  function isMobileViewport() {
+    return window.matchMedia("(max-width: 767px)").matches;
+  }
+
   function selectAndClose(id: string) {
     selectSession(id);
-    setIsSidebarOpen(false);
+    if (isMobileViewport()) setIsSidebarOpen(false);
   }
 
   function createAndClose() {
     createSession();
-    setIsSidebarOpen(false);
+    if (isMobileViewport()) setIsSidebarOpen(false);
     setInput("");
   }
 
@@ -68,6 +75,7 @@ export function ChatContainer() {
         sessionsError={sessionsError}
         onSelect={selectAndClose}
         onCreate={createAndClose}
+        onRename={renameSession}
         onDelete={deleteSession}
         onClose={() => setIsSidebarOpen(false)}
         onRetry={retryLoadSessions}

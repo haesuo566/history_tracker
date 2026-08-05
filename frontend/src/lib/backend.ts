@@ -21,7 +21,7 @@ export class BackendError extends Error {
 }
 
 interface RequestOptions {
-  method: "GET" | "POST" | "DELETE";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   body?: unknown;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -238,6 +238,22 @@ export async function getConversation(
     .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
     .map(toConversationMessage)
     .filter((item): item is ConversationMessageItem => item !== null);
+}
+
+/** PATCH /conversations/{id} 로 제목을 바꾼다. 이미 없는 대화면 false. */
+export async function renameConversation(
+  conversationId: string,
+  title: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const result = await request(`/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    body: { title },
+    timeoutMs: CONVERSATION_TIMEOUT_MS,
+    signal,
+    treatNotFoundAsNull: true,
+  });
+  return result !== null;
 }
 
 /** DELETE /conversations/{id} 로 대화를 지운다. 이미 없는 대화면 false. */
