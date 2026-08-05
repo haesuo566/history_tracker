@@ -10,9 +10,9 @@ class Settings(BaseSettings):
     embedding_dim: int = 3072
     gemini_api_key: str
     embedding_model: str = "gemini-embedding-001"
-    query_rewrite_model: str = "gemini-3.5-flash-lite"
-    intent_classify_model: str = "gemini-3.5-flash-lite"
-    answer_model: str = "gemini-3.5-flash-lite"
+    query_rewrite_model: str = "gemini-3.1-flash-lite"
+    intent_classify_model: str = "gemini-3.1-flash-lite"
+    answer_model: str = "gemini-3.1-flash-lite"
     min_cosine_similarity: float = 0.5
     min_fts_matched_terms: int = 1
     chat_history_messages: int = 10
