@@ -7,7 +7,9 @@ from backend.models.conversation import Conversation, Message, MessageRole
 from backend.services.conversation import (
     append_message,
     ensure_conversation,
+    load_conversation,
     load_recent_messages,
+    rename_conversation,
 )
 from backend.services.query_parser import _build_contents
 
@@ -87,6 +89,18 @@ def test_messages_of_other_conversations_are_not_mixed_in(db):
     append_message(other, MessageRole.USER, "남의 질문", db)
 
     assert turns(db, mine) == [("user", "내 질문")]
+
+
+def test_rename_overwrites_the_auto_derived_title(db):
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "요리 블로그 찾아줘", db)
+
+    assert rename_conversation(conversation_id, "저녁 메뉴 검색", db) is True
+    assert load_conversation(conversation_id, db).title == "저녁 메뉴 검색"
+
+
+def test_unknown_conversation_id_is_not_renamed(db):
+    assert rename_conversation("does-not-exist", "새 이름", db) is False
 
 
 def test_build_contents_maps_roles_and_appends_current_message_last():

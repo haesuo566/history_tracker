@@ -20,9 +20,9 @@ class MessageRole(StrEnum):
 class Conversation(Base):
     """이어지는 대화 한 세션. 실제 내용은 Message에 있고 여기엔 세션 식별자만 둔다.
 
-    title은 첫 user 메시지가 저장되는 시점에 한 번만 채워지고(services.conversation.append_message),
-    그 뒤로는 바뀌지 않는다. 매 목록 조회마다 messages를 다시 훑지 않기 위한 캐시일 뿐, 사용자가
-    직접 수정하는 기능은 아니다. TITLE_MAX_CHARS자로 자르고 말줄임표(1자)를 붙이므로 컬럼 길이는 +1.
+    title은 첫 user 메시지가 저장되는 시점에 한 번 채워지고(services.conversation.append_message),
+    이후 사용자가 PATCH /conversations/{id}(services.conversation.rename_conversation)로 직접
+    바꿀 수도 있다. TITLE_MAX_CHARS자로 자르고 말줄임표(1자)를 붙이므로 컬럼 길이는 +1.
     """
 
     __tablename__ = "conversations"

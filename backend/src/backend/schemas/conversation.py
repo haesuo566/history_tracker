@@ -1,6 +1,8 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from backend.models.conversation import TITLE_MAX_CHARS
 
 
 class ConversationSummary(BaseModel):
@@ -34,3 +36,23 @@ class ConversationDetail(BaseModel):
     conversation_id: str
     created_at: datetime
     messages: list[ConversationMessage]
+
+
+class ConversationRenameRequest(BaseModel):
+    """PATCH /conversations/{id} 요청 본문.
+
+    append_message가 채우는 title(첫 질문에서 자동으로 뽑아냄)과 달리 사용자가 직접 입력한
+    값을 그대로 쓴다. 앞뒤 공백만 지우고, 그 결과가 빈 문자열이거나 너무 길면 거부한다.
+    """
+
+    title: str
+
+    @field_validator("title")
+    @classmethod
+    def _clean(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must not be blank")
+        if len(stripped) > TITLE_MAX_CHARS:
+            raise ValueError(f"title must be at most {TITLE_MAX_CHARS} characters")
+        return stripped

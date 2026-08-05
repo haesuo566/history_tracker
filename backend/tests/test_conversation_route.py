@@ -202,6 +202,54 @@ def test_detail_of_unknown_id_is_404(api):
     assert client.get("/conversations/does-not-exist").status_code == 404
 
 
+def test_rename_changes_the_title(api):
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+    turn(conversation_id, "요리 블로그 찾아줘", "이 글입니다", db)
+
+    response = client.patch(f"/conversations/{conversation_id}", json={"title": "저녁 메뉴 검색"})
+
+    assert response.status_code == 204
+    (row,) = listed(client)
+    assert row["title"] == "저녁 메뉴 검색"
+
+
+def test_rename_strips_surrounding_whitespace(api):
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+
+    client.patch(f"/conversations/{conversation_id}", json={"title": "  새 이름  "})
+
+    (row,) = listed(client)
+    assert row["title"] == "새 이름"
+
+
+def test_rename_rejects_a_blank_title(api):
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+
+    response = client.patch(f"/conversations/{conversation_id}", json={"title": "   "})
+
+    assert response.status_code == 422
+
+
+def test_rename_rejects_a_title_longer_than_the_limit(api):
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+
+    response = client.patch(f"/conversations/{conversation_id}", json={"title": "가" * (TITLE_MAX_CHARS + 1)})
+
+    assert response.status_code == 422
+
+
+def test_rename_of_unknown_id_is_404(api):
+    client, _db = api
+
+    response = client.patch("/conversations/does-not-exist", json={"title": "새 이름"})
+
+    assert response.status_code == 404
+
+
 def test_delete_removes_the_conversation_from_the_list(api):
     client, db = api
     conversation_id = ensure_conversation(None, db)

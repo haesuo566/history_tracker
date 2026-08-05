@@ -5,11 +5,13 @@ from backend.db.session import get_db
 from backend.schemas.conversation import (
     ConversationDetail,
     ConversationListResponse,
+    ConversationRenameRequest,
 )
 from backend.services.conversation import (
     delete_conversation,
     list_conversations,
     load_conversation_detail,
+    rename_conversation,
 )
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -28,6 +30,14 @@ def detail(conversation_id: str, db: Session = Depends(get_db)) -> ConversationD
     if conversation is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     return conversation
+
+
+@router.patch("/{conversation_id}", status_code=204)
+def rename(
+    conversation_id: str, request: ConversationRenameRequest, db: Session = Depends(get_db)
+) -> None:
+    if not rename_conversation(conversation_id, request.title, db):
+        raise HTTPException(status_code=404, detail="conversation not found")
 
 
 @router.delete("/{conversation_id}", status_code=204)

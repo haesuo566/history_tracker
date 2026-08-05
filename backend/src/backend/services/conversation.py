@@ -87,6 +87,22 @@ def load_all_messages(conversation_id: str, db: Session) -> list[Message]:
     return list(messages)
 
 
+def rename_conversation(conversation_id: str, title: str, db: Session) -> bool:
+    """대화 제목을 사용자가 지정한 값으로 바꾼다. 모르는 id면 아무것도 하지 않고 False.
+
+    title은 이미 스키마(ConversationRenameRequest)에서 앞뒤 공백을 지우고 길이를 검증했으므로
+    여기서는 그대로 쓴다.
+    """
+    conversation = load_conversation(conversation_id, db)
+    if conversation is None:
+        return False
+
+    conversation.title = title
+    db.commit()
+    logger.info("conversation renamed: conversation_id={} title={!r}", conversation_id, title)
+    return True
+
+
 def delete_conversation(conversation_id: str, db: Session) -> bool:
     """대화와 그 메시지를 모두 지운다. 모르는 id면 아무것도 하지 않고 False.
 
