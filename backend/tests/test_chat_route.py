@@ -29,9 +29,11 @@ def chat(monkeypatch):
 
     def fake_rewrite_query(message, history=()):
         seen["history"] = [(past.role, past.content) for past in history]
-        # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. '잡담'이 섞인 입력만 etc로 본다.
+        # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
+        # 의도를 정한다 — 의도 판정 규칙 자체는 test_preprocess.py가 본다.
+        intent = Intent.ETC if "잡담" in message else Intent.DETAIL if "상세" in message else Intent.RECALL
         return ParsedQuery(
-            intent=Intent.ETC if "잡담" in message else Intent.RECALL,
+            intent=intent,
             query=f"{message}(재작성)",
             desired_count=3 if "3개" in message else None,
         )
@@ -169,3 +171,14 @@ def test_regex_verdict_wins_over_the_rewrite(chat):
     post(client, "잡담 블로그 찾아줘")
 
     assert seen["query"] == "잡담 블로그 찾아줘(재작성)"
+
+
+def test_detail_still_takes_the_recall_path_for_now(chat):
+    """상세 검색 경로는 아직 없다. 분류만 갈라 두고 지금은 recall과 같은 검색을 탄다."""
+    client, db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    post(client, "그거 상세 내용 알려줘", conversation_id)
+
+    assert seen["query"] == "그거 상세 내용 알려줘(재작성)"
+    assert stored(db, conversation_id)[3] == ("assistant", "그거 상세 내용 알려줘에 대한 답변")

@@ -3,9 +3,13 @@ from enum import StrEnum
 
 
 class Intent(StrEnum):
-    """chat 메시지를 분류하는 2가지 의도."""
+    """chat 메시지를 분류하는 3가지 의도."""
 
+    # DETAIL은 RECALL을 더 나눈 것이다. 기록에서 새로 찾는 것(RECALL)과 이미 찾아준 결과 중
+    # 하나를 지목해 더 캐묻는 것(DETAIL)은 앞선 대화를 봐야 갈리므로, 정규식은 이 둘을 구분하지
+    # 못하고 재작성 호출(services/query_parser.py)이 가린다.
     RECALL = "recall"
+    DETAIL = "detail"
     ETC = "etc"
 
 
@@ -26,6 +30,9 @@ def classify_by_regex(message: str) -> Intent | None:
 
     판정 불가(None)는 전처리에서 질의 재작성 호출이 맡는다. '그거 뭐였지'처럼 앞선 대화를
     가리키는 후속 질문은 원문만으로는 갈릴 수 없고 history가 있어야 판단되기 때문이다.
+
+    여기서 나오는 RECALL은 '기록 관련'까지만 뜻한다. DETAIL은 절대 나오지 않는다 — '찾아줘'
+    같은 키워드는 새로 찾는 질문과 이미 찾아준 결과를 캐묻는 질문에 똑같이 붙는다.
     """
     stripped = message.strip()
     if not stripped:
