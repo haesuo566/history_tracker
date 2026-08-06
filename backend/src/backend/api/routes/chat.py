@@ -5,12 +5,9 @@ from backend.db.session import get_db
 from backend.models.conversation import MessageRole
 from backend.schemas.chat import ChatRequest, ChatResponse
 from backend.services.answer import generate_answer, generate_recall_answer
-from backend.services.conversation import (
-    append_message,
-    ensure_conversation,
-    load_recent_messages,
-)
-from backend.services.intent import Intent, classify_intent
+from backend.services.conversation import append_message
+from backend.services.intent import Intent
+from backend.services.preprocess import preprocess_message
 from backend.services.search import search_history
 
 router = APIRouter(tags=["chat"])
@@ -18,18 +15,15 @@ router = APIRouter(tags=["chat"])
 
 @router.post("/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    conversation_id = ensure_conversation(request.conversation_id, db)
-    # 이번 입력을 저장하기 전에 읽어야 history가 "직전까지의 대화"가 된다.
-    history = load_recent_messages(conversation_id, db)
-    append_message(conversation_id, MessageRole.USER, request.message, db)
+    prepared = preprocess_message(request.message, request.conversation_id, db)
 
-    intent = classify_intent(request.message)
-    if intent == Intent.RECALL:
-        results = search_history(request.message, db, history=history)
+    # 답변은 재작성된 검색어가 아니라 원문을 근거로 만든다. 사용자가 실제로 물은 문장이다.
+    if prepared.intent == Intent.RECALL:
+        results = search_history(prepared.query, db, count=prepared.desired_count)
         answer = generate_recall_answer(request.message, results)
     else:
         results = []
         answer = generate_answer(request.message)
 
-    append_message(conversation_id, MessageRole.ASSISTANT, answer, db)
-    return ChatResponse(conversation_id=conversation_id, results=results, answer=answer)
+    append_message(prepared.conversation_id, MessageRole.ASSISTANT, answer, db)
+    return ChatResponse(conversation_id=prepared.conversation_id, results=results, answer=answer)

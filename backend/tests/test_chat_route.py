@@ -9,28 +9,42 @@ from backend.api.routes import chat as chat_route
 from backend.db.base import Base
 from backend.db.session import get_db
 from backend.models.conversation import Conversation, Message
+from backend.services import preprocess as preprocess_service
 from backend.services.intent import Intent
+from backend.services.query_parser import ParsedQuery
 
 
 @pytest.fixture
 def chat(monkeypatch):
     """Gemini와 검색을 대체한 /chat. 대화 저장·전달 배선만 남겨서 확인한다.
 
-    (client, db, seen) 을 준다. seen["history"] 에는 search_history 가 받은 history 가 담긴다.
+    (client, db, seen) 을 준다. seen 에는 재작성이 받은 history 와, 전처리를 거쳐 검색으로
+    넘어간 query·count 가 담긴다. 재작성이 아예 불리지 않았으면 "history" 키가 없다.
     """
     # TestClient는 앱을 별도 스레드에서 돌린다. 인메모리 DB를 그 스레드와 공유하려면 운영 엔진과
     # 같은 check_same_thread=False 에 더해, 커넥션이 하나로 유지되는 StaticPool이 필요하다.
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(bind=engine, tables=[Conversation.__table__, Message.__table__])
-    seen: dict[str, list[tuple[str, str]]] = {}
+    seen: dict = {}
 
-    def fake_search_history(message, db, history=()):
+    def fake_rewrite_query(message, history=()):
         seen["history"] = [(past.role, past.content) for past in history]
+        # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. '잡담'이 섞인 입력만 etc로 본다.
+        return ParsedQuery(
+            intent=Intent.ETC if "잡담" in message else Intent.RECALL,
+            query=f"{message}(재작성)",
+            desired_count=3 if "3개" in message else None,
+        )
+
+    def fake_search_history(query, db, count=None):
+        seen["query"] = query
+        seen["count"] = count
         return []
 
-    monkeypatch.setattr(chat_route, "classify_intent", lambda message: Intent.RECALL)
+    monkeypatch.setattr(preprocess_service, "rewrite_query", fake_rewrite_query)
     monkeypatch.setattr(chat_route, "search_history", fake_search_history)
     monkeypatch.setattr(chat_route, "generate_recall_answer", lambda message, results: f"{message}에 대한 답변")
+    monkeypatch.setattr(chat_route, "generate_answer", lambda message: f"{message}에 대한 잡담 답변")
 
     app = FastAPI()
     app.include_router(chat_route.router)
@@ -97,3 +111,61 @@ def test_omitting_the_id_starts_a_fresh_conversation(chat):
 
     assert body["conversation_id"] != first
     assert seen["history"] == []
+
+
+def test_search_receives_the_rewritten_query(chat):
+    """검색은 원문이 아니라 전처리를 거친 검색어를 받아야 한다."""
+    client, _db, seen = chat
+
+    post(client, "요리 블로그 찾아줘")
+
+    assert seen["query"] == "요리 블로그 찾아줘(재작성)"
+
+
+def test_requested_result_count_reaches_search(chat):
+    """재작성이 뽑아낸 결과 개수도 전처리 결과로 검색까지 전달돼야 한다."""
+    client, _db, seen = chat
+
+    post(client, "요리 블로그 3개만 찾아줘")
+
+    assert seen["count"] == 3
+
+
+def test_answer_is_generated_from_the_original_message(chat):
+    """검색어는 재작성해도 사용자에게 답할 때 근거로 삼는 질문은 원문이다."""
+    client, db, _seen = chat
+
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    assert stored(db, conversation_id)[1] == ("assistant", "요리 블로그 찾아줘에 대한 답변")
+
+
+def test_greeting_skips_the_rewrite_entirely(chat):
+    """정규식이 잡담으로 확신한 턴은 검색을 타지 않으니 재작성 호출도 낭비다."""
+    client, db, seen = chat
+
+    conversation_id = post(client, "안녕")["conversation_id"]
+
+    assert "history" not in seen  # 재작성이 불리지 않았다
+    assert "query" not in seen  # 검색도 불리지 않았다
+    assert stored(db, conversation_id)[1] == ("assistant", "안녕에 대한 잡담 답변")
+
+
+def test_rewrite_can_route_an_undecided_message_to_chitchat(chat):
+    """정규식이 판단하지 못한 턴은 재작성이 돌려준 의도를 따른다."""
+    client, db, seen = chat
+
+    conversation_id = post(client, "잡담이나 하자")["conversation_id"]
+
+    assert seen["history"] == []  # 의도를 받으려면 재작성은 돌아야 한다
+    assert "query" not in seen  # etc로 판정됐으니 검색은 안 탄다
+    assert stored(db, conversation_id)[1] == ("assistant", "잡담이나 하자에 대한 잡담 답변")
+
+
+def test_regex_verdict_wins_over_the_rewrite(chat):
+    """정규식이 recall로 확신하면 재작성이 etc라고 해도 검색을 탄다."""
+    client, _db, seen = chat
+
+    post(client, "잡담 블로그 찾아줘")
+
+    assert seen["query"] == "잡담 블로그 찾아줘(재작성)"

@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     gemini_api_key: str
     embedding_model: str = "gemini-embedding-001"
     query_rewrite_model: str = "gemini-3.1-flash-lite"
-    intent_classify_model: str = "gemini-3.1-flash-lite"
     answer_model: str = "gemini-3.1-flash-lite"
     min_cosine_similarity: float = 0.5
     min_fts_matched_terms: int = 1
