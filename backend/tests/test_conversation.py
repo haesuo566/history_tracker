@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.base import Base
 from backend.models.conversation import Conversation, Message, MessageRole
+from backend.models.document import Document
 from backend.services.conversation import (
     append_message,
     ensure_conversation,
@@ -82,6 +83,43 @@ def test_limit_zero_loads_nothing(db):
     assert load_recent_messages(conversation_id, db, limit=0) == []
 
 
+def test_char_budget_keeps_the_most_recent_messages_that_fit(db):
+    """건수가 남아 있어도 글자 예산이 먼저 차면 거기서 끊는다."""
+    conversation_id = ensure_conversation(None, db)
+    for index in range(4):
+        append_message(conversation_id, MessageRole.USER, str(index) * 100, db)
+
+    recent = load_recent_messages(conversation_id, db, max_chars=250)
+
+    assert [message.content[0] for message in recent] == ["2", "3"]
+
+
+def test_char_budget_stops_at_the_first_oversized_message(db):
+    """예산을 넘는 한 건만 건너뛰고 더 오래된 메시지로 채우지는 않는다. 대화 중간이 비면 안 된다."""
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "짧은 옛 질문", db)
+    append_message(conversation_id, MessageRole.ASSISTANT, "긴 답변" * 100, db)
+    append_message(conversation_id, MessageRole.USER, "최근 질문", db)
+
+    recent = load_recent_messages(conversation_id, db, max_chars=50)
+
+    assert [message.content for message in recent] == ["최근 질문"]
+
+
+def test_a_message_larger_than_the_budget_loads_nothing(db):
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "긴 질문" * 100, db)
+
+    assert load_recent_messages(conversation_id, db, max_chars=50) == []
+
+
+def test_char_budget_zero_loads_nothing(db):
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "질문", db)
+
+    assert load_recent_messages(conversation_id, db, max_chars=0) == []
+
+
 def test_messages_of_other_conversations_are_not_mixed_in(db):
     mine = ensure_conversation(None, db)
     other = ensure_conversation(None, db)
@@ -152,4 +190,26 @@ def test_build_contents_without_history_sends_only_the_current_message():
 
     assert [(content.role, content.parts[0].text) for content in contents] == [
         ("user", "파이썬 비동기 글 찾아줘")
+    ]
+
+
+def test_build_contents_lists_candidates_just_before_the_current_message():
+    """번호로 지목하려면 무엇이 몇 번인지 보여야 한다. 답변 문장만으로는 되짚을 수 없다."""
+    candidates = [
+        Document(document_id="doc-1", url="https://a.example.com/kimchi", title="김치찌개 레시피"),
+        Document(document_id="doc-2", url="https://b.example.com/doenjang", title="된장찌개 끓이는 법"),
+    ]
+
+    contents = _build_contents("두 번째 것 자세히", [], candidates)
+
+    assert [(content.role, content.parts[0].text) for content in contents] == [
+        (
+            "user",
+            (
+                "직전에 보여준 결과 목록:\n"
+                "1. 김치찌개 레시피 (https://a.example.com/kimchi)\n"
+                "2. 된장찌개 끓이는 법 (https://b.example.com/doenjang)"
+            ),
+        ),
+        ("user", "두 번째 것 자세히"),
     ]

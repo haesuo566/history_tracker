@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.db.base import Base
@@ -45,4 +45,8 @@ class Message(Base):
     conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.conversation_id"), index=True)
     role: Mapped[str]
     content: Mapped[str] = mapped_column(Text)
+    # 그 턴이 사용자에게 보여준 결과의 document_id를 보여준 순서대로 남긴다. '두 번째 것'처럼
+    # 지목하는 detail 턴은 목록 자체가 있어야 풀리는데, content에는 답변 문장만 남아 제목이 실리지
+    # 않은 턴은 되짚을 수 없다. 결과가 없던 턴은 NULL이라 '결과가 있던 마지막 턴'을 그대로 고른다.
+    result_document_ids: Mapped[list[str] | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

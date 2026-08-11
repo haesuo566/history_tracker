@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from backend.core.config import settings
 from backend.models.conversation import Message, MessageRole
+from backend.models.document import Document
 from backend.services.intent import Intent
 
 _client: genai.Client | None = None
@@ -20,7 +21,10 @@ class ParsedQuery(BaseModel):
     # 설명은 모델에게 도움이 될 만큼만 적고, 설계 근거는 주석으로 남긴다. intent를 앞에 두는 것은
     # 의도를 먼저 정하고 그에 맞는 검색어를 쓰게 하려는 의도다 — 지시 표현이 무엇을 가리키는지
     # 찾는 일과 이 턴이 recall인지 판단하는 일이 같은 추론이라 한 호출로 함께 받는다.
+    # target_index가 query보다 앞인 것도 같은 이유다. 지목한 대상을 먼저 정해야 그 제목을 검색어로
+    # 쓸 수 있다.
     intent: Intent
+    target_index: int | None = None
     query: str
     desired_count: int | None = None
 
@@ -35,6 +39,11 @@ SYSTEM_INSTRUCTION = (
     "대화의 결과 목록 안에 있어야 detail이다. 앞선 대화에 결과가 없거나 기록을 새로 뒤져야 하면 "
     "detail이 아니라 recall이다. "
     "etc: 그 외 잡담이나 무관한 질문. "
+    "번호가 붙은 결과 목록이 함께 주어지면 detail 판단의 근거는 그 목록이다. intent가 detail이면 "
+    "사용자가 지목한 항목의 번호를 target_index에 담아라. 순서('두 번째'), 제목의 일부, 사이트 "
+    "이름이나 주소 등 무엇으로 가리켰든 목록에서 그 항목을 찾아 번호로 바꿔라. 목록에서 하나로 "
+    "좁힐 수 없으면 target_index는 null이고, 그때는 detail이 아니라 recall이다. "
+    "목록이 주어지지 않았거나 intent가 detail이 아니면 target_index는 null이다. "
     "query 필드에는 검색 엔진에 넣기 좋은 간결한 한국어 검색어 문장을 담아라. "
     "대화체, 잡담, 존댓말 표현은 제거하고 핵심 주제와 키워드만 남겨라. "
     "'그거', '아까 그 사이트', '두 번째 것'처럼 앞선 대화를 가리키는 표현은 대화에서 그 대상을 찾아 "
@@ -56,12 +65,19 @@ def _get_client() -> genai.Client:
     return _client
 
 
-def _build_contents(message: str, history: Sequence[Message]) -> list[types.Content]:
+def _build_contents(
+    message: str, history: Sequence[Message], candidates: Sequence[Document] = ()
+) -> list[types.Content]:
     """이전 메시지를 Gemini 멀티턴 contents로 옮기고 마지막에 이번 입력을 붙인다.
 
     Gemini는 contents가 user 발화로 시작하길 기대한다. 정상 경로에서는 user/assistant가 짝을
     이루지만 답변 생성이 실패해 user 메시지만 저장된 턴이 있으면 최근 N건을 자른 결과가
     assistant부터 시작할 수 있어, 앞쪽 assistant 발화는 버린다.
+
+    후보 목록은 이번 입력 바로 앞에 번호를 붙여 끼운다. 이전 답변 문장에는 제목이 실리지 않은 턴도
+    있어, 무엇이 목록에 있었는지는 대화 내용만으로 되짚을 수 없다. 목록을 따로 보여줘야 판단과
+    번호 지목이 같은 것을 보고 이뤄진다. 별개의 발화로 두는 것은 '판단 대상은 마지막 사용자
+    메시지'라는 지시를 흐리지 않기 위해서다.
     """
     spoken = (past for past in history if past.content)
     turns = dropwhile(lambda past: past.role != MessageRole.USER, spoken)
@@ -69,24 +85,35 @@ def _build_contents(message: str, history: Sequence[Message]) -> list[types.Cont
         types.Content(role=_GEMINI_ROLE.get(past.role, "user"), parts=[types.Part(text=past.content)])
         for past in turns
     ]
+    if candidates:
+        listing = "\n".join(
+            f"{index}. {candidate.title} ({candidate.url})" for index, candidate in enumerate(candidates, start=1)
+        )
+        contents.append(
+            types.Content(role="user", parts=[types.Part(text=f"직전에 보여준 결과 목록:\n{listing}")])
+        )
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
     return contents
 
 
-def rewrite_query(message: str, history: Sequence[Message] = ()) -> ParsedQuery:
+def rewrite_query(
+    message: str, history: Sequence[Message] = (), candidates: Sequence[Document] = ()
+) -> ParsedQuery:
     """사용자 입력을 의도와 검색어, 메타데이터(원하는 결과 개수 등)로 한 번에 해석한다.
 
     history를 넘기면 그 대화를 맥락으로 삼아 '그거', '아까 그 사이트' 같은 지시 표현을 풀어낸다.
+    candidates는 직전에 보여준 결과 목록으로, 지목된 항목의 번호를 target_index로 받는 근거가 된다.
     """
     logger.debug(
-        "rewriting query via {}: {!r} (history={} message(s))",
+        "rewriting query via {}: {!r} (history={} message(s), candidates={})",
         settings.query_rewrite_model,
         message,
         len(history),
+        len(candidates),
     )
     response = _get_client().models.generate_content(
         model=settings.query_rewrite_model,
-        contents=_build_contents(message, history),
+        contents=_build_contents(message, history, candidates),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",

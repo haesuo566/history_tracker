@@ -9,9 +9,18 @@ from backend.api.routes import chat as chat_route
 from backend.db.base import Base
 from backend.db.session import get_db
 from backend.models.conversation import Conversation, Message
+from backend.models.document import Document
+from backend.schemas.chat import ChatResult
 from backend.services import preprocess as preprocess_service
 from backend.services.intent import Intent
 from backend.services.query_parser import ParsedQuery
+
+DOCUMENT_ID = "doc-kimchi"
+OTHER_DOCUMENT_ID = "doc-doenjang"
+
+# detail 답변이 카드용 발췌(as_chat_result 의 앞 300자)가 아니라 본문을 근거로 받는지 가리려면
+# 본문이 그보다 길어야 한다.
+FULL_TEXT = "돼지고기와 신김치를 볶다가 물을 붓는다. " * 20
 
 
 @pytest.fixture
@@ -24,16 +33,20 @@ def chat(monkeypatch):
     # TestClient는 앱을 별도 스레드에서 돌린다. 인메모리 DB를 그 스레드와 공유하려면 운영 엔진과
     # 같은 check_same_thread=False 에 더해, 커넥션이 하나로 유지되는 StaticPool이 필요하다.
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine, tables=[Conversation.__table__, Message.__table__])
+    Base.metadata.create_all(
+        bind=engine, tables=[Conversation.__table__, Message.__table__, Document.__table__]
+    )
     seen: dict = {}
 
-    def fake_rewrite_query(message, history=()):
+    def fake_rewrite_query(message, history=(), candidates=()):
         seen["history"] = [(past.role, past.content) for past in history]
+        seen["candidates"] = [candidate.document_id for candidate in candidates]
         # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
         # 의도를 정한다 — 의도 판정 규칙 자체는 test_preprocess.py가 본다.
         intent = Intent.ETC if "잡담" in message else Intent.DETAIL if "상세" in message else Intent.RECALL
         return ParsedQuery(
             intent=intent,
+            target_index=1 if intent is Intent.DETAIL else None,
             query=f"{message}(재작성)",
             desired_count=3 if "3개" in message else None,
         )
@@ -41,17 +54,56 @@ def chat(monkeypatch):
     def fake_search_history(query, db, count=None):
         seen["query"] = query
         seen["count"] = count
-        return []
+        return [
+            ChatResult(
+                document_id=DOCUMENT_ID,
+                url="https://blog.example.com/kimchi-jjigae",
+                title="김치찌개 레시피",
+                score=0.9,
+                snippet="돼지고기와 신김치를",
+            ),
+            ChatResult(
+                document_id=OTHER_DOCUMENT_ID,
+                url="https://blog.example.com/doenjang-jjigae",
+                title="된장찌개 끓이는 법",
+                score=0.7,
+                snippet="된장을 풀고",
+            ),
+        ]
+
+    def fake_generate_detail_answer(message, document):
+        seen["detail_body"] = document.full_text
+        return f"{message}에 대한 상세 답변"
 
     monkeypatch.setattr(preprocess_service, "rewrite_query", fake_rewrite_query)
     monkeypatch.setattr(chat_route, "search_history", fake_search_history)
     monkeypatch.setattr(chat_route, "generate_recall_answer", lambda message, results: f"{message}에 대한 답변")
     monkeypatch.setattr(chat_route, "generate_answer", lambda message: f"{message}에 대한 잡담 답변")
+    monkeypatch.setattr(chat_route, "generate_detail_answer", fake_generate_detail_answer)
 
     app = FastAPI()
     app.include_router(chat_route.router)
 
     with Session(engine) as db:
+        db.add_all(
+            [
+                Document(
+                    document_id=DOCUMENT_ID,
+                    url="https://blog.example.com/kimchi-jjigae",
+                    title="김치찌개 레시피",
+                    full_text=FULL_TEXT,
+                    hash="hash-kimchi",
+                ),
+                Document(
+                    document_id=OTHER_DOCUMENT_ID,
+                    url="https://blog.example.com/doenjang-jjigae",
+                    title="된장찌개 끓이는 법",
+                    full_text="된장을 풀고 두부를 넣는다",
+                    hash="hash-doenjang",
+                ),
+            ]
+        )
+        db.commit()
         app.dependency_overrides[get_db] = lambda: db
         with TestClient(app) as client:
             yield client, db, seen
@@ -63,11 +115,18 @@ def post(client: TestClient, message: str, conversation_id: str | None = None) -
     return response.json()
 
 
-def stored(db: Session, conversation_id: str) -> list[tuple[str, str]]:
-    messages = db.scalars(
-        select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id)
+def messages_of(db: Session, conversation_id: str) -> list[Message]:
+    return list(
+        db.scalars(select(Message).where(Message.conversation_id == conversation_id).order_by(Message.id))
     )
-    return [(message.role, message.content) for message in messages]
+
+
+def stored(db: Session, conversation_id: str) -> list[tuple[str, str]]:
+    return [(message.role, message.content) for message in messages_of(db, conversation_id)]
+
+
+def results_of(db: Session, conversation_id: str) -> list[list[str] | None]:
+    return [message.result_document_ids for message in messages_of(db, conversation_id)]
 
 
 def test_first_request_issues_an_id_and_has_no_history(chat):
@@ -173,12 +232,74 @@ def test_regex_verdict_wins_over_the_rewrite(chat):
     assert seen["query"] == "잡담 블로그 찾아줘(재작성)"
 
 
-def test_detail_still_takes_the_recall_path_for_now(chat):
-    """상세 검색 경로는 아직 없다. 분류만 갈라 두고 지금은 recall과 같은 검색을 탄다."""
+def test_shown_results_are_stored_with_the_answer(chat):
+    """다음 턴이 '두 번째 것'을 짚으려면 이번 턴이 무엇을 보여줬는지 남아 있어야 한다."""
+    client, db, _seen = chat
+
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    assert results_of(db, conversation_id) == [None, [DOCUMENT_ID, OTHER_DOCUMENT_ID]]
+
+
+def test_chitchat_turn_stores_no_result_list(chat):
+    """결과가 없던 턴이 후보로 걸리면 화면에 없는 것을 지목하게 된다."""
+    client, db, _seen = chat
+
+    conversation_id = post(client, "안녕")["conversation_id"]
+
+    assert results_of(db, conversation_id) == [None, None]
+
+
+def test_detail_uses_the_pointed_document_without_searching_again(chat):
+    """지목이 끝난 문서를 다시 검색하면 그 문서가 아닌 것이 올라올 수 있다."""
+    client, _db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+    seen.pop("query")
+
+    body = post(client, "그거 상세 내용 알려줘", conversation_id)
+
+    # 직전 턴이 보여준 목록이 재작성으로 넘어갔다
+    assert seen["candidates"] == [DOCUMENT_ID, OTHER_DOCUMENT_ID]
+    assert "query" not in seen  # 검색은 다시 타지 않았다
+    assert [result["document_id"] for result in body["results"]] == [DOCUMENT_ID]
+
+
+def test_detail_answer_is_grounded_in_the_whole_body(chat):
+    """'자세히 알려줘'에 답하려면 카드에 보이는 발췌로는 부족하다. 본문 전체가 근거여야 한다."""
+    client, _db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    body = post(client, "그거 상세 내용 알려줘", conversation_id)
+
+    assert seen["detail_body"] == FULL_TEXT
+    assert len(body["results"][0]["snippet"]) < len(FULL_TEXT)  # 카드용 발췌는 그대로 잘려 나간다
+
+
+def test_detail_turn_does_not_shrink_the_candidate_list(chat):
+    """detail 턴이 목록을 지목된 한 건으로 갈아치우면 '아니 두 번째 것'이 막힌다."""
     client, db, seen = chat
     conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
 
     post(client, "그거 상세 내용 알려줘", conversation_id)
+    post(client, "그거 상세 내용 알려줘", conversation_id)
 
+    # 두 번째 상세 요청도 recall 턴이 보여준 목록 전체를 후보로 받는다
+    assert seen["candidates"] == [DOCUMENT_ID, OTHER_DOCUMENT_ID]
+    assert results_of(db, conversation_id) == [
+        None,
+        [DOCUMENT_ID, OTHER_DOCUMENT_ID],
+        None,
+        None,
+        None,
+        None,
+    ]
+
+
+def test_detail_without_a_previous_result_list_falls_back_to_search(chat):
+    """지목할 목록이 없으면 상세 요청으로 볼 수 없다. 기록을 새로 뒤진다."""
+    client, _db, seen = chat
+
+    post(client, "그거 상세 내용 알려줘")
+
+    assert seen["candidates"] == []
     assert seen["query"] == "그거 상세 내용 알려줘(재작성)"
-    assert stored(db, conversation_id)[3] == ("assistant", "그거 상세 내용 알려줘에 대한 답변")

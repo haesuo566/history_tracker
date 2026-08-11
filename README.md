@@ -51,19 +51,30 @@ cd backend
 uv sync
 ```
 
-`backend/.env` 에 Gemini API 키를 넣습니다.
+`.env.example` 을 복사해 `backend/.env` 를 만들고 Gemini API 키를 채웁니다.
 
-```
-GEMINI_API_KEY=your-api-key
+```bash
+cp .env.example .env
 ```
 
-| 환경변수 | 기본값 | 설명 |
+설정값은 전부 `.env` 에서 읽습니다. 코드에 기본값이 없으므로 아래 항목이 하나라도
+비어 있으면 서버가 뜨지 않습니다.
+
+| 환경변수 | 예시값 | 설명 |
 | --- | --- | --- |
+| `APP_NAME` | `backend` | FastAPI 문서 제목 |
+| `LOG_LEVEL` | `INFO` | loguru 로그 레벨 |
 | `GEMINI_API_KEY` | — | Google AI Studio 에서 발급 |
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLite 이외를 쓰면 `vec_chunks`/`chunk_fts` 가 생성되지 않습니다 |
 | `EMBEDDING_DIM` | `3072` | 색인 후 변경하면 기존 벡터와 차원이 어긋납니다 |
 | `EMBEDDING_MODEL` | `gemini-embedding-001` | |
-| `QUERY_REWRITE_MODEL` | `gemini-3.5-flash` | 질의 재작성용 |
+| `QUERY_REWRITE_MODEL` | `gemini-3.1-flash-lite` | 질의 재작성·의도 판단용 |
+| `ANSWER_MODEL` | `gemini-3.1-flash-lite` | 답변 생성용 |
+| `MIN_COSINE_SIMILARITY` | `0.5` | 벡터 검색 최소 유사도 |
+| `MIN_FTS_MATCHED_TERMS` | `1` | FTS 검색 최소 일치 명사 수 |
+| `CHAT_HISTORY_MESSAGES` | `30` | 프롬프트에 넣을 직전 대화 개수 |
+| `CHAT_HISTORY_MAX_CHARS` | `8000` | 직전 대화의 글자 수 상한. 넘치면 오래된 것부터 버립니다 |
+| `DETAIL_MAX_CHARS` | `20000` | 상세 답변의 근거로 실을 본문 길이 상한. 넘치면 앞부분만 씁니다 |
 
 서버를 띄웁니다. 첫 실행 시 테이블과 가상 테이블이 자동 생성됩니다.
 
