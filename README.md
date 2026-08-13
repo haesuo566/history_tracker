@@ -2,9 +2,13 @@
 
 내가 본 웹페이지를 자동으로 모아두고, 나중에 자연어로 다시 찾는 도구.
 
-"어제 본 리액트 상태관리 글" 처럼 기억나는 대로 물어보면, 방문 기록 중 가장 관련 있는
-페이지 한 건을 링크로 돌려줍니다. 제목·URL 뿐 아니라 **본문 내용까지 색인**하기 때문에
+"어제 본 리액트 상태관리 글" 처럼 기억나는 대로 물어보면, 방문 기록에서 관련 있는 페이지를
+찾아 링크 카드와 답변을 함께 돌려줍니다. 제목·URL 뿐 아니라 **본문 내용까지 색인**하기 때문에
 브라우저 기본 방문 기록 검색으로는 못 찾는 페이지도 찾을 수 있습니다.
+
+찾아준 결과 중 하나를 "두 번째 것 자세히 알려줘", "velog에서 본 거 요약해줘" 처럼 지목하면
+그 페이지의 **본문을 근거로** 요약하거나 물은 대목을 찾아 답합니다. 대화는 세션으로 남아
+이어서 물을 수 있고, 사이드바에서 지난 대화를 다시 열 수 있습니다.
 
 ## 구성
 
@@ -14,7 +18,7 @@
 | --- | --- | --- |
 | [`extension/`](extension/README.md) | 방문 페이지 수집 (Chrome 확장) | Manifest V3, Mozilla Readability |
 | `backend/` | 저장 · 색인 · 하이브리드 검색 | FastAPI, SQLAlchemy, SQLite(vec0 + FTS5), Gemini |
-| [`frontend/`](frontend/README.md) | 검색용 채팅 UI | Next.js 16 App Router, React 19, Tailwind 4 |
+| [`frontend/`](frontend/README.md) | 검색용 채팅 UI, 대화 목록, 색인 트리거 | Next.js 16 App Router, React 19, Tailwind 4 |
 
 ### 데이터 흐름
 
@@ -30,17 +34,31 @@
      │
      │  POST /chat  { message: "어제 본 리액트 글" }
      ▼
-전처리: 대화 확정·입력 저장 → 최근 대화를 맥락으로 의도 판단 + 질의 재작성 (Gemini 1회)
-     │                                        └─ 잡담(etc)이면 검색 없이 일반 응답
-     ▼
-재작성된 검색어 ─┬─ 임베딩 → vec_chunks 벡터 검색 (k=5)
-                 └─ Kiwi 명사 추출 → chunk_fts 전문 검색 (FTS5)
-                            │
-                 RRF(k=60) 병합 → 문서별 최고 점수 → 1위 문서 1건 반환
+전처리: 대화 확정·입력 저장 → 직전 대화 + 직전에 보여준 결과 목록을 맥락으로
+        의도 판단 + 질의 재작성 + 지목 대상 번호를 한 번에 받음 (Gemini 1회)
+     │
+     ├─ etc     잡담. 검색 없이 일반 응답
+     │
+     ├─ detail  이미 보여준 결과 중 하나를 지목한 턴. 그 문서의 본문을 근거로 답변
+     │          (어느 것인지 특정하지 못하면 recall 로 내려보냄)
+     │
+     └─ recall  기록을 새로 검색
+            │
+            ├─ 임베딩 → vec_chunks 벡터 검색 (최근접 50건, 유사도 하한 이내)
+            └─ Kiwi 명사 추출 → chunk_fts 전문 검색 (FTS5)
+                       │
+            RRF(k=60) 병합 → 문서별 최고 점수 → 상위 N건 반환
+            (N은 기본 5, "3개만" 처럼 요청하면 그 개수)
 ```
 
 수집(`/collect`)과 색인(`/batch`)이 분리되어 있습니다. 수집은 방문할 때마다 실시간으로
 일어나지만, 임베딩 API 호출은 비용이 있으므로 미처리 문서를 모아 배치로 처리합니다.
+
+각 단계는 그림과 함께 따로 정리해두었습니다.
+
+- [`docs/collection-pipeline.md`](docs/collection-pipeline.md) — 방문을 어떤 기준으로 잡아 본문을
+  추출하고 어떻게 색인까지 쌓는지
+- [`docs/query-flow.md`](docs/query-flow.md) — 질문 한 건이 들어와 답변과 링크 카드가 나가기까지
 
 ## 빠른 시작
 
@@ -118,6 +136,7 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 | `POST` | `/chat` | `{ "message": "...", "conversation_id": "..." \| null }` | `{ conversation_id, results: [{ document_id, url, title, score, snippet }], answer }` |
 | `GET` | `/conversations` | `limit` (기본 50, 최대 200) | `{ "conversations": [{ conversation_id, title, message_count, created_at, last_message_at }] }` |
 | `GET` | `/conversations/{conversation_id}` | — | `{ conversation_id, created_at, messages: [{ role, content, created_at }] }`, 모르는 id 면 `404` |
+| `PATCH` | `/conversations/{conversation_id}` | `{ "title": "..." }` | `204`, 모르는 id 면 `404`, 빈 문자열이거나 60자를 넘는 `title` 이면 `422` |
 | `DELETE` | `/conversations/{conversation_id}` | — | `204`, 모르는 id 면 `404` |
 
 `/batch` 는 문서 단위로 savepoint 를 잡기 때문에 한 문서의 색인이 실패해도 나머지는
@@ -127,14 +146,37 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 클라이언트는 그 값을 저장해뒀다가 다음 요청에 실어 보내면 대화가 이어집니다.
 
 `title` 은 그 대화의 첫 `user` 메시지를 한 줄로 접어 60자까지 자른 뒤 `conversations.title` 에
-저장된 값입니다. 그 메시지가 저장되는 시점에 한 번만 채워지고 이후로는 바뀌지 않으므로, 매 목록
-조회마다 `messages` 를 다시 훑지 않습니다(`message_count`, `last_message_at` 은 컬럼으로 두지
-않아 여전히 그때마다 집계합니다). 정렬은 최근 활동 순이며, 시각이 초 단위라 같은 초에 몰린
-대화끼리는 id 로 갈립니다.
+저장된 값입니다. 그 메시지가 저장되는 시점에 한 번만 채워지므로, 매 목록 조회마다 `messages` 를
+다시 훑지 않습니다(`message_count`, `last_message_at` 은 컬럼으로 두지 않아 여전히 그때마다
+집계합니다). 이후 자동으로 바뀌는 일은 없고, `PATCH /conversations/{conversation_id}` 로만
+바뀝니다. 정렬은 최근 활동 순이며, 시각이 초 단위라 같은 초에 몰린 대화끼리는 id 로 갈립니다.
 
 `DELETE /conversations/{conversation_id}` 는 대화와 그 메시지를 함께 지웁니다. `Message.conversation_id`
 가 FK 로 선언돼 있지만 SQLite 는 `PRAGMA foreign_keys=ON` 없이는 이를 강제하지 않고, 이 프로젝트도
 그 설정을 켜지 않으므로 메시지를 명시적으로 같이 지웁니다.
+
+## 의도 분류
+
+`/chat` 은 한 턴을 세 갈래로 봅니다.
+
+| 의도 | 뜻 | 답변 근거 |
+| --- | --- | --- |
+| `recall` | 기록에서 페이지를 새로 찾는 질문 | 검색 결과 목록(제목·URL·본문 발췌) |
+| `detail` | 이미 찾아준 결과 중 하나를 지목해 더 캐묻는 질문 | 지목된 문서 하나의 본문 |
+| `etc` | 잡담이나 무관한 질문 | 없음(일반 대화) |
+
+먼저 정규식으로 확실한 것만 가릅니다. 인사말은 `etc`, "찾아줘"·"봤던 사이트" 같은 표현은
+`recall` 입니다. 정규식은 `detail` 을 판정하지 않습니다 — 같은 표현이 새로 찾는 질문과 이미
+찾아준 결과를 캐묻는 질문에 똑같이 붙어, 앞선 대화를 봐야 갈리기 때문입니다.
+
+나머지는 질의 재작성 호출이 판단합니다. 지시 표현("그거", "아까 그 사이트")이 무엇을 가리키는지
+찾는 일과 이 턴이 `recall` 인지 판단하는 일이 같은 추론이라, 의도·검색어·지목 대상 번호·요청
+개수를 한 번의 호출로 함께 받습니다.
+
+지목한 문서를 특정하는 것은 두 단계입니다. 1차는 이 호출이 후보 목록을 보고 고른 번호로,
+순서("두 번째")·제목·사이트 이름이 한 번에 풀립니다. 2차는 그 번호가 없거나 범위를 벗어났을
+때의 문자열 매칭(명사 겹침 + 유사도)입니다. 둘 다 실패하면 아무거나 고르지 않고 `recall` 로
+내려보냅니다. 엉뚱한 문서를 근거로 그럴듯하게 답하는 것이 가장 나쁜 실패라서입니다.
 
 ## 저장 구조
 
@@ -145,10 +187,16 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 | `vec_chunks` | vec0 가상 | 청크 임베딩. `document_id` 를 파티션 키로 사용 |
 | `chunk_fts` | FTS5 가상 | 청크 본문 전문 색인. `vector_key` 는 `"{document_id}:{seq}"` |
 | `conversations` | 일반 | 대화 세션. `conversation_id`(UUID), `created_at`, `title`(첫 user 메시지에서 한 번만 채워지는 캐시, 최대 61자) |
-| `messages` | 일반 | 대화에 오간 메시지. `conversation_id`, `role`, `content`. 순서는 `id` 로 판단합니다 |
+| `messages` | 일반 | 대화에 오간 메시지. `conversation_id`, `role`, `content`, `result_document_ids`(그 턴에 보여준 결과의 문서 id 목록. 결과가 없던 턴은 `NULL`). 순서는 `id` 로 판단합니다 |
 
 청크 본문은 `chunks` 에 중복 저장하지 않고 `char_start`/`char_end` 로 `documents.full_text`
 를 가리킵니다. 전문 검색용 사본만 `chunk_fts` 에 들어갑니다.
+
+`messages.result_document_ids` 는 "두 번째 것" 같은 지목을 풀기 위한 것입니다. `content` 에는
+답변 문장만 남아 제목이 실리지 않은 턴은 무엇을 보여줬는지 되짚을 수 없으므로, 보여준 순서대로
+문서 id 를 따로 남깁니다. `detail` 턴은 이 목록을 갱신하지 않습니다 — 새 목록을 보여준 턴이
+아니라 이미 보여준 목록에서 하나를 설명한 턴이라, 지목된 한 건으로 갈아치우면 "아니 세 번째 것"
+같은 연속 지목이 막힙니다.
 
 ### 왜 하이브리드 검색인가
 
@@ -177,8 +225,14 @@ Python 3.12 이상이 필요합니다(`backend/.python-version`).
 
 ## 알려진 제약
 
-- **검색 결과는 항상 1건**입니다. `/chat` 은 RRF 1위 문서만 반환하며, 관련 기록이 없으면
-  `result: null` 입니다.
+- **검색 결과는 기본 5건**입니다. "3개만 찾아줘" 처럼 개수를 말하면 그 수만큼 돌려주고,
+  관련 기록이 없으면 `results` 가 빈 배열입니다.
+- **상세 답변의 근거는 본문 앞부분**입니다. 본문이 `DETAIL_MAX_CHARS` 를 넘으면 앞에서부터
+  자르고(잘렸다는 사실은 프롬프트에 함께 알립니다), 질문과 맞물리는 구간을 골라 싣지는
+  않습니다. 수집이 본문을 못 남긴 기록은 지어내지 않고 알려줄 수 없다고 답합니다.
+- **지목할 수 있는 후보는 최근 대화 안에 있는 것뿐**입니다. 후보 목록은 프롬프트에 실린 범위
+  (`CHAT_HISTORY_MESSAGES`, `CHAT_HISTORY_MAX_CHARS`)에서 찾으므로, 그보다 앞선 턴에서 보여준
+  결과는 "두 번째 것" 으로 집을 수 없습니다.
 - **`/batch` 는 자동 실행되지 않습니다.** 스케줄러가 없어 색인 시점을 직접 골라야 합니다.
 - **CORS 가 전면 개방**되어 있습니다(`allow_origins=["*"]`). 확장 프로그램에서 직접
   호출하기 위한 설정이므로, 로컬 또는 신뢰된 네트워크 안에서만 띄우세요.
@@ -188,6 +242,7 @@ Python 3.12 이상이 필요합니다(`backend/.python-version`).
   지우고 다시 만들어야 합니다. 컬럼을 추가하는 경우처럼 기존 데이터(수집한 문서·임베딩 등,
   다시 만들려면 비용이 들거나 재수집이 불가능한 데이터)를 지킬 필요가 있으면, `init_db()`
   안에서 `PRAGMA table_info` 로 존재 여부를 확인하고 없을 때만 `ALTER TABLE` 로 더하는 식의
-  1회성 마이그레이션을 직접 추가해야 합니다(`conversations.title` 이 그 사례입니다).
+  1회성 마이그레이션을 직접 추가해야 합니다(`init_db._ensure_column` 이 그 자리이며,
+  `conversations.title` 과 `messages.result_document_ids` 가 그렇게 더해진 컬럼입니다).
 - 확장 프로그램 쪽 제약(시크릿 모드, SPA 본문 재추출)은
   [`extension/README.md`](extension/README.md) 에 정리되어 있습니다.
