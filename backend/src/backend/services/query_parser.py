@@ -1,17 +1,15 @@
 from collections.abc import Sequence
 from itertools import dropwhile
 
-from google import genai
 from google.genai import types
 from loguru import logger
 from pydantic import BaseModel
 
-from backend.core.config import settings
 from backend.models.conversation import Message, MessageRole
 from backend.models.document import Document
+from backend.services.gemini import get_client
 from backend.services.intent import Intent
-
-_client: genai.Client | None = None
+from backend.services.runtime_settings import get_settings
 
 
 class ParsedQuery(BaseModel):
@@ -58,13 +56,6 @@ SYSTEM_INSTRUCTION = (
 _GEMINI_ROLE = {MessageRole.USER: "user", MessageRole.ASSISTANT: "model"}
 
 
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
-    return _client
-
-
 def _build_contents(
     message: str, history: Sequence[Message], candidates: Sequence[Document] = ()
 ) -> list[types.Content]:
@@ -104,15 +95,16 @@ def rewrite_query(
     history를 넘기면 그 대화를 맥락으로 삼아 '그거', '아까 그 사이트' 같은 지시 표현을 풀어낸다.
     candidates는 직전에 보여준 결과 목록으로, 지목된 항목의 번호를 target_index로 받는 근거가 된다.
     """
+    model = get_settings().query_rewrite_model
     logger.debug(
         "rewriting query via {}: {!r} (history={} message(s), candidates={})",
-        settings.query_rewrite_model,
+        model,
         message,
         len(history),
         len(candidates),
     )
-    response = _get_client().models.generate_content(
-        model=settings.query_rewrite_model,
+    response = get_client().models.generate_content(
+        model=model,
         contents=_build_contents(message, history, candidates),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,

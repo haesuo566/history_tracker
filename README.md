@@ -17,7 +17,7 @@
 | 디렉터리 | 역할 | 스택 |
 | --- | --- | --- |
 | [`extension/`](extension/README.md) | 방문 페이지 수집 (Chrome 확장) | Manifest V3, Mozilla Readability |
-| `backend/` | 저장 · 색인 · 하이브리드 검색 | FastAPI, SQLAlchemy, SQLite(vec0 + FTS5), Gemini |
+| `backend/` | 저장 · 색인 · 하이브리드 검색 | FastAPI, SQLAlchemy, SQLite(vec0 + FTS5), Gemini, TEI(선택) |
 | [`frontend/`](frontend/README.md) | 검색용 채팅 UI, 대화 목록, 색인 트리거 | Next.js 16 App Router, React 19, Tailwind 4 |
 
 ### 데이터 흐름
@@ -30,7 +30,8 @@
      │
      │  POST /batch  (수동 트리거 — 프론트엔드의 색인 버튼 또는 직접 호출)
      ▼
-청킹(약 2048토큰, 개행 경계) → Gemini 임베딩 → [chunks] + [vec_chunks] + [chunk_fts]
+청킹(임베딩 입력 한계에 맞춰 자동, 개행 경계) → 임베딩(Gemini 또는 TEI)
+     → [chunks] + [vec_chunks] + [chunk_fts]
      │
      │  POST /chat  { message: "어제 본 리액트 글" }
      ▼
@@ -78,16 +79,19 @@ cp .env.example .env
 설정값은 전부 `.env` 에서 읽습니다. 코드에 기본값이 없으므로 아래 항목이 하나라도
 비어 있으면 서버가 뜨지 않습니다.
 
+★ 표시한 네 항목은 [설정 화면](#5-설정)에서 재기동 없이 바꿀 수 있고, 한 번 저장하면 그 값이
+`.env` 보다 우선합니다. 나머지는 `.env` 전용입니다.
+
 | 환경변수 | 예시값 | 설명 |
 | --- | --- | --- |
 | `APP_NAME` | `backend` | FastAPI 문서 제목 |
 | `LOG_LEVEL` | `INFO` | loguru 로그 레벨 |
-| `GEMINI_API_KEY` | — | Google AI Studio 에서 발급 |
+| `GEMINI_API_KEY` ★ | — | Google AI Studio 에서 발급 |
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLite 이외를 쓰면 `vec_chunks`/`chunk_fts` 가 생성되지 않습니다 |
 | `EMBEDDING_DIM` | `3072` | 색인 후 변경하면 기존 벡터와 차원이 어긋납니다 |
-| `EMBEDDING_MODEL` | `gemini-embedding-001` | |
-| `QUERY_REWRITE_MODEL` | `gemini-3.1-flash-lite` | 질의 재작성·의도 판단용 |
-| `ANSWER_MODEL` | `gemini-3.1-flash-lite` | 답변 생성용 |
+| `EMBEDDING_MODEL` ★ | `gemini-embedding-001` | |
+| `QUERY_REWRITE_MODEL` ★ | `gemini-3.1-flash-lite` | 질의 재작성·의도 판단용 |
+| `ANSWER_MODEL` ★ | `gemini-3.1-flash-lite` | 답변 생성용 |
 | `MIN_COSINE_SIMILARITY` | `0.5` | 벡터 검색 최소 유사도 |
 | `MIN_FTS_MATCHED_TERMS` | `1` | FTS 검색 최소 일치 명사 수 |
 | `CHAT_HISTORY_MESSAGES` | `30` | 프롬프트에 넣을 직전 대화 개수 |
@@ -126,6 +130,103 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 몇 개 페이지를 돌아다녀 문서를 모은 뒤, 화면의 색인 버튼으로 `/batch` 를 한 번 실행하고
 질문하면 됩니다. 색인하지 않은 문서는 검색되지 않습니다.
 
+### 5. 설정
+
+화면 우측 상단의 톱니바퀴(`/settings`)에서 모델과 Gemini API key, 임베딩 제공자를 바꿉니다.
+저장한 값은 `app_settings` 테이블에 남아 `.env` 보다 우선하고, 서버를 다시 띄우지 않아도 다음
+요청부터 적용됩니다.
+
+- 고를 수 있는 모델은 백엔드 상수(`core/model_catalog.py`)에 적힌 목록입니다. 여기 없는 모델을
+  쓰려면 `.env` 로 지정하세요 — 그 값도 `(.env 지정)` 이 붙어 선택 상자에 함께 나옵니다.
+- API key 는 저장 후 원문을 되돌려주지 않습니다. 끝 네 자리 힌트만 보이고, 입력란을 비워 두고
+  저장하면 기존 키가 유지됩니다.
+
+설정 변경은 프로세스 안의 캐시를 갱신하는 방식이라, 워커를 여러 개 띄우면 변경을 받지 못한
+워커가 남습니다. 즉시 반영이 필요하면 단일 워커로 띄우세요.
+
+### 6. 임베딩 제공자 (Gemini 또는 TEI)
+
+임베딩은 Gemini API 대신 자체 호스팅 [TEI](https://github.com/huggingface/text-embeddings-inference)
+로 받을 수 있습니다. 답변 생성과 질의 재작성은 그대로 Gemini 를 쓰므로 API key 는 여전히
+필요합니다. 임베딩만 밖으로 내보내지 않게 되는 것입니다.
+
+TEI 를 띄웁니다(예: bge-m3).
+
+```bash
+docker run -p 8080:80 --gpus all \
+  ghcr.io/huggingface/text-embeddings-inference:latest \
+  --model-id BAAI/bge-m3
+```
+
+설정 화면에서 제공자를 'TEI' 로 바꾸고 주소(`http://127.0.0.1:8080`)를 넣어 저장한 뒤,
+**색인을 다시 만들어야** 합니다. 저장만 하면 검색은 본문 단어 검색만으로 동작합니다.
+
+호출은 OpenAI 호환 경로(`POST /v1/embeddings`)로 나갑니다. 그래서 vLLM·Infinity 처럼 같은 규약을
+내놓는 서버도 그대로 붙습니다. 주소에 `/v1/embeddings` 를 붙여 적어도 되고 생략해도 됩니다.
+
+#### 왜 재색인이 필요한가
+
+임베딩을 바꾸면 이미 쌓인 벡터는 **다른 공간의 좌표**가 되어 검색에 쓸 수 없습니다. 차원까지
+달라지면(gemini-embedding-001 은 3072, bge-m3 는 1024) `vec_chunks` 자체를 그 차원으로 다시
+만들어야 합니다 — 가상 테이블에는 차원을 바꾸는 `ALTER` 가 없습니다.
+
+그래서 백엔드는 색인이 어떤 임베딩으로 만들어졌는지 서명(`제공자:모델`)으로 남겨 두고, 지금
+설정과 다르면 `/settings` 응답의 `reindex_required` 를 켭니다. 그동안 검색은 **벡터 검색을 건너뛰고
+전문 검색만** 씁니다. 차원이 어긋난 채로 벡터 검색을 하면 sqlite-vec 가 오류를 내며 검색 전체가
+실패하고, 차원이 같아도 값이 무의미해 엉뚱한 문서가 올라옵니다.
+
+`POST /reindex` (화면의 '색인 다시 만들기') 는 색인을 비우기만 합니다.
+
+| 지워지는 것 | 남는 것 |
+| --- | --- |
+| `chunks`, `vec_chunks`, `chunk_fts` | `documents` (수집한 본문), `conversations`, `messages` |
+
+`documents` 를 남기는 것은 수집이 확장이 방문할 때만 일어나 다시 만들 수 없기 때문입니다. 청크와
+벡터는 본문만 있으면 언제든 다시 만들 수 있습니다. 비운 뒤 모든 문서가 색인 대기로 돌아가므로,
+이어서 색인 버튼(`POST /batch`)을 눌러 다시 쌓습니다. 기록 수만큼 임베딩 호출이 듭니다.
+
+차원을 알아내려고 임베딩을 한 번 호출하는 것이 재색인의 첫 단계입니다. TEI 에 붙지 못하면 그
+지점에서 실패하고 색인은 그대로 남습니다 — 되돌릴 수 없는 일을 하기 전에 막습니다.
+
+#### 청킹 크기는 임베딩이 정합니다
+
+청크 하나의 크기는 설정 항목이 아닙니다. **지금 쓰는 임베딩의 입력 한계에서 자동으로 환산**합니다.
+
+| 임베딩 | 입력 한계 | 청크 크기 |
+| --- | --- | --- |
+| `gemini-embedding-001` | 2048 토큰 | 2252자 |
+| `gemini-embedding-2` | 8192 토큰 | 9011자 |
+| TEI | `/info` 의 `max_input_length` | 그 값 × 1.1 |
+
+한계를 넘겨 보내면 **오류가 나지 않고 뒷부분이 조용히 버려집니다**. Gemini 도 TEI 도 그렇습니다
+(TEI 는 `auto_truncate` 가 기본으로 켜져 있습니다). 그래서 사람이 숫자를 적어 넣는 방식으로 두지
+않았습니다 — 잘못 적으면 색인이 성공한 것처럼 보이면서 검색 품질만 떨어집니다.
+
+토큰이 아니라 문자로 자르는 것은 임베딩 모델의 토크나이저를 로컬에서 돌릴 수 없기 때문입니다.
+대신 토큰 한계를 **1토큰 = 1.1자**로 보수적으로 환산합니다(`core/model_catalog.py`). 실제 수집된
+한국어 문서를 재보면 1.22~3.89 자/토큰이고, 가장 촘촘한 문서에서도 한계의 90% 안에 들어옵니다.
+한국어는 영어(3~4자/토큰)보다 훨씬 촘촘해서, 넉넉하게 잡으면 그만큼 뒤가 잘려 나갑니다.
+
+TEI 가 `/info` 를 내놓지 않으면 보수적으로 512 토큰(TEI 기본값)으로 봅니다. 청크가 짧아질 뿐
+잘리지는 않습니다.
+
+청킹 기준도 색인 상태에 남습니다. 그래서 임베딩을 바꿔 청크 크기가 달라지면 설정 화면이 재색인을
+안내합니다. 이때 **벡터 검색은 계속 동작합니다** — 좌표를 만든 모델이 같으므로 견줄 수는 있고,
+한계를 넘겼던 부분이 빠져 있을 뿐입니다. 모델 자체가 바뀐 경우(벡터를 쓸 수 없는 경우)와는 화면
+안내가 다릅니다.
+
+#### 모델을 고를 때
+
+`EMBEDDING_DIM` 은 Gemini 경로에서 요청하는 차원이고, TEI 차원은 서버에 올린 모델이 정합니다.
+지금 색인의 차원과 청크 크기는 설정 화면에 표시됩니다.
+
+bge-m3 를 기준으로 맞춰 두었습니다. 다른 모델을 쓸 때 걸리는 것:
+
+- **query/passage 프리픽스** — Gemini 는 문서와 질의를 다른 `task_type` 으로 임베딩하지만 TEI 에는
+  그 개념이 없습니다. e5 계열은 `query: `/`passage: ` 프리픽스가 그 역할을 하는데, bge-m3 는
+  요구하지 않으므로 지금은 문서와 질의를 같은 방식으로 보냅니다.
+- **배치 크기** — TEI 의 `--max-client-batch-size` 기본값이 32라 청크를 32개씩 잘라 보냅니다.
+
 ## API
 
 | 메서드 | 경로 | 요청 | 응답 |
@@ -138,6 +239,9 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 | `GET` | `/conversations/{conversation_id}` | — | `{ conversation_id, created_at, messages: [{ role, content, created_at }] }`, 모르는 id 면 `404` |
 | `PATCH` | `/conversations/{conversation_id}` | `{ "title": "..." }` | `204`, 모르는 id 면 `404`, 빈 문자열이거나 60자를 넘는 `title` 이면 `422` |
 | `DELETE` | `/conversations/{conversation_id}` | — | `204`, 모르는 id 면 `404` |
+| `GET` | `/settings` | — | 지금 설정과 선택지. 모델 3종, `embedding_provider`, `tei_base_url`, `tei_model`, `embedding_dim`, `indexed_dim`, `reindex_required`, `api_key_configured`, `api_key_hint`, 선택지 목록 |
+| `PATCH` | `/settings` | 모델 3종, `embedding_provider`, `tei_base_url`, `tei_model`, `gemini_api_key` 중 바꿀 것만 | `GET` 과 같은 형태의 갱신 결과. 목록 밖 모델·빈 `gemini_api_key`·주소 없는 `tei` 면 `422` |
+| `POST` | `/reindex` | 없음 | `{ "provider": "tei", "dim": 1024, "pending": 12, "recreated": true }`. 임베딩 제공자에 붙지 못하면 `502` 이고 색인은 그대로 |
 
 `/batch` 는 문서 단위로 savepoint 를 잡기 때문에 한 문서의 색인이 실패해도 나머지는
 그대로 커밋됩니다. 실패한 문서는 `checked` 가 `false` 로 남아 다음 실행에서 재시도됩니다.
@@ -188,6 +292,7 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 | `chunk_fts` | FTS5 가상 | 청크 본문 전문 색인. `vector_key` 는 `"{document_id}:{seq}"` |
 | `conversations` | 일반 | 대화 세션. `conversation_id`(UUID), `created_at`, `title`(첫 user 메시지에서 한 번만 채워지는 캐시, 최대 61자) |
 | `messages` | 일반 | 대화에 오간 메시지. `conversation_id`, `role`, `content`, `result_document_ids`(그 턴에 보여준 결과의 문서 id 목록. 결과가 없던 턴은 `NULL`). 순서는 `id` 로 판단합니다 |
+| `app_settings` | 일반 | 설정 화면에서 바꾼 값. `key` PK, `value`, `updated_at`. 여기 있는 항목만 `.env` 를 덮어씁니다. 색인이 어떤 임베딩으로 만들어졌는지(`indexed_embedding_dim`, `indexed_embedding_signature`)도 여기 남고, 그쪽은 재색인만 씁니다 |
 
 청크 본문은 `chunks` 에 중복 저장하지 않고 `char_start`/`char_end` 로 `documents.full_text`
 를 가리킵니다. 전문 검색용 사본만 `chunk_fts` 에 들어갑니다.

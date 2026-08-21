@@ -33,19 +33,30 @@ Next.js 16 App Router 로 만든 채팅 UI. 자연어로 물어보면 FastAPI �
 src/
   app/
     api/chat/route.ts      요청 검증 후 백엔드 /chat 으로 프록시
+    api/batch/route.ts     색인 트리거를 백엔드 /batch 로 프록시
+    api/conversations/     대화 목록·조회·이름변경·삭제 프록시
+    api/settings/route.ts  설정 조회·저장 프록시
+    api/reindex/route.ts   색인 비우기 프록시
     layout.tsx             전체 화면 레이아웃 (입력창 하단 고정)
     page.tsx               채팅 페이지
+    settings/page.tsx      설정 페이지 (모델 선택, API key)
     globals.css            Tailwind + 테마 변수
   components/chat/
-    ChatContainer.tsx      입력 상태 + 헤더/목록/입력창 조합
+    ChatContainer.tsx      입력 상태 + 헤더/사이드바/목록/입력창 조합
+    ChatSidebar.tsx        대화 목록, 이름 바꾸기·삭제
     MessageList.tsx        스크롤 컨테이너, 빈 상태, 예시 질문
     MessageBubble.tsx      말풍선 (AI 응답은 링크 카드)
     ChatInput.tsx          자동 높이 textarea, Enter 전송, 중단 버튼
+    BatchControl.tsx       색인 버튼과 결과 배너
+  components/settings/
+    SettingsForm.tsx       설정 폼과 헤더
   hooks/
-    useChat.ts             메시지 히스토리, 요청/중단/초기화
+    useChatSessions.ts     세션 목록, 메시지 히스토리, 요청/중단
+    useBatch.ts            색인 실행 상태
+    useSettings.ts         설정 조회·저장
   lib/
-    backend.ts             백엔드 /chat 호출, 타임아웃, 필드 정리
-    types.ts               공유 타입 (메시지, 검색 결과)
+    backend.ts             백엔드 호출, 타임아웃, 필드 정리
+    types.ts               공유 타입 (메시지, 검색 결과, 설정)
 ```
 
 ## 백엔드 연동

@@ -8,6 +8,7 @@ from backend.models.chunk import Chunk
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
 from backend.services.embedding import embed_query
+from backend.services.runtime_settings import get_settings
 from backend.services.tokenizer import extract_nouns
 
 RRF_K = 60
@@ -45,6 +46,25 @@ def _vector_search(db: Session, query_embedding: list[float], limit: int) -> lis
         },
     ).all()
     return [(document_id, seq) for document_id, seq, _distance in vector_hits]
+
+
+def _vector_search_if_usable(db: Session, query: str, limit: int) -> list[ChunkKey]:
+    """색인이 지금 임베딩으로 만들어져 있을 때만 벡터 검색을 한다.
+
+    임베딩 제공자나 모델을 바꾸고 재색인하지 않으면 색인에는 다른 공간의 좌표가 들어 있다. 차원이
+    다르면 sqlite-vec가 오류를 내며 검색 전체가 실패하고, 차원이 같아도 값이 무의미해 엉뚱한 문서가
+    올라온다. 어느 쪽이든 쓸 수 없으므로 전문 검색만으로 답한다 — 검색이 아예 안 되는 것보다는
+    낫고, 재색인이 필요하다는 사실은 설정 화면이 알린다(reindex_required).
+    """
+    current = get_settings()
+    if not current.vector_index_usable:
+        logger.warning(
+            "skipping vector search: index built with {!r} but settings say {!r} — reindex needed",
+            current.indexed_signature,
+            current.embedding_signature,
+        )
+        return []
+    return _vector_search(db, embed_query(query), limit)
 
 
 def _fts_search(db: Session, nouns: list[str], limit: int) -> list[ChunkKey]:
@@ -121,8 +141,7 @@ def search_history(query: str, db: Session, limit: int = 50, count: int | None =
     """
     count = count if count and count > 0 else DEFAULT_RESULT_COUNT
 
-    query_embedding = embed_query(query)
-    vector_keys = _vector_search(db, query_embedding, limit)
+    vector_keys = _vector_search_if_usable(db, query, limit)
 
     nouns = extract_nouns(query)
     fts_keys = _fts_search(db, nouns, limit)

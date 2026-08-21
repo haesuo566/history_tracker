@@ -1,12 +1,11 @@
-from google import genai
 from google.genai import types
 from loguru import logger
 
 from backend.core.config import settings
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-
-_client: genai.Client | None = None
+from backend.services.gemini import get_client
+from backend.services.runtime_settings import get_settings
 
 SYSTEM_INSTRUCTION = (
     "너는 사용자의 웹 브라우징 기록을 검색해주는 어시스턴트의 대화 응답을 담당한다. "
@@ -31,18 +30,12 @@ DETAIL_SYSTEM_INSTRUCTION = (
 )
 
 
-def _get_client() -> genai.Client:
-    global _client
-    if _client is None:
-        _client = genai.Client(api_key=settings.gemini_api_key)
-    return _client
-
-
 def generate_answer(message: str) -> str:
     """etc 의도의 메시지에 대해 Gemini로 일반 대화 응답을 생성한다."""
-    logger.debug("generating chat answer via {}: {!r}", settings.answer_model, message)
-    response = _get_client().models.generate_content(
-        model=settings.answer_model,
+    model = get_settings().answer_model
+    logger.debug("generating chat answer via {}: {!r}", model, message)
+    response = get_client().models.generate_content(
+        model=model,
         contents=message,
         config=types.GenerateContentConfig(system_instruction=SYSTEM_INSTRUCTION),
     )
@@ -51,16 +44,15 @@ def generate_answer(message: str) -> str:
 
 def generate_recall_answer(message: str, results: list[ChatResult]) -> str:
     """recall 의도의 메시지에 대해 검색된 기록(title, url)을 근거로 Gemini 응답을 생성한다."""
-    logger.debug(
-        "generating recall answer via {}: {!r} ({} result(s))", settings.answer_model, message, len(results)
-    )
+    model = get_settings().answer_model
+    logger.debug("generating recall answer via {}: {!r} ({} result(s))", model, message, len(results))
     found = (
         "\n".join(f"- {result.title} ({result.url})\n  본문 발췌: {result.snippet}" for result in results)
         or "(검색 결과 없음)"
     )
     contents = f"사용자 질문: {message}\n\n검색된 기록:\n{found}"
-    response = _get_client().models.generate_content(
-        model=settings.answer_model,
+    response = get_client().models.generate_content(
+        model=model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=RECALL_SYSTEM_INSTRUCTION),
     )
@@ -79,15 +71,16 @@ def generate_detail_answer(message: str, document: Document) -> str:
         logger.info("detail document has no usable body: document_id={}", document.document_id)
         return f"'{document.title}' 기록은 제목과 주소만 남아 있어 본문 내용을 알려드릴 수 없습니다."
 
+    model = get_settings().answer_model
     logger.debug(
         "generating detail answer via {}: {!r} (document_id={} body={} chars)",
-        settings.answer_model,
+        model,
         message,
         document.document_id,
         len(document.full_text),
     )
-    response = _get_client().models.generate_content(
-        model=settings.answer_model,
+    response = get_client().models.generate_content(
+        model=model,
         contents=contents,
         config=types.GenerateContentConfig(system_instruction=DETAIL_SYSTEM_INSTRUCTION),
     )

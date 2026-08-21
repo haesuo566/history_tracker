@@ -1,4 +1,11 @@
-import type { BatchSummary, SearchResult } from "@/lib/types";
+import type {
+  BatchSummary,
+  ModelOption,
+  ReindexSummary,
+  SearchResult,
+  SettingsBody,
+  SettingsUpdateBody,
+} from "@/lib/types";
 
 /** FastAPI 백엔드 주소. 라우트 핸들러(서버)에서만 읽으므로 NEXT_PUBLIC_ 접두사가 필요 없다. */
 const BASE_URL = (process.env.BACKEND_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
@@ -12,11 +19,26 @@ const BATCH_TIMEOUT_MS = 10 * 60_000;
 /** 대화 목록/조회/삭제는 단순 DB 조회라 오래 걸릴 이유가 없다. */
 const CONVERSATION_TIMEOUT_MS = 10_000;
 
-/** 백엔드 호출 실패를 사용자에게 보여줄 문구와 함께 전달한다. */
+/** 설정 조회/저장도 DB만 건드린다. */
+const SETTINGS_TIMEOUT_MS = 10_000;
+
+/**
+ * 재색인은 색인을 비우는 것까지만 하지만, 그 전에 임베딩 제공자를 한 번 불러 차원을 확인한다.
+ * TEI 가 막 떠서 모델을 올리는 중이면 그 한 번이 오래 걸릴 수 있다.
+ */
+const REINDEX_TIMEOUT_MS = 60_000;
+
+/**
+ * 백엔드 호출 실패를 사용자에게 보여줄 문구와 함께 전달한다.
+ * status 는 백엔드가 응답은 했으나 오류였을 때의 상태 코드다. 연결 실패·타임아웃이면 없다.
+ */
 export class BackendError extends Error {
-  constructor(message: string) {
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "BackendError";
+    this.status = status;
   }
 }
 
@@ -65,7 +87,7 @@ async function request(
     return null;
   }
   if (!response.ok) {
-    throw new BackendError(`백엔드가 오류를 반환했습니다 (${response.status}).`);
+    throw new BackendError(`백엔드가 오류를 반환했습니다 (${response.status}).`, response.status);
   }
   if (response.status === 204) {
     return undefined;
@@ -254,6 +276,124 @@ export async function renameConversation(
     treatNotFoundAsNull: true,
   });
   return result !== null;
+}
+
+function toModelOptions(value: unknown): ModelOption[] | null {
+  if (!Array.isArray(value)) return null;
+
+  const options: ModelOption[] = [];
+  for (const item of value) {
+    if (typeof item !== "object" || item === null) return null;
+    const { id, label } = item as Record<string, unknown>;
+    if (typeof id !== "string" || id.length === 0 || typeof label !== "string") return null;
+    options.push({ id, label });
+  }
+  return options;
+}
+
+/**
+ * 백엔드 SettingsResponse 를 형태만 확인해서 그대로 돌려준다.
+ * 선택 상자를 그릴 수 없는 응답(모델 목록이 비었거나 형태가 다름)은 오류로 본다 — 빈 선택 상자를
+ * 보여주면 사용자가 고를 수 없는데도 저장 버튼은 눌리는 화면이 된다.
+ */
+function toSettings(payload: unknown): SettingsBody {
+  const raw = payload as Record<string, unknown>;
+  const generationModels = toModelOptions(raw.generation_models);
+  const embeddingModels = toModelOptions(raw.embedding_models);
+  const providers = toModelOptions(raw.embedding_providers);
+  const provider = raw.embedding_provider;
+
+  if (
+    typeof raw.answer_model !== "string" ||
+    typeof raw.query_rewrite_model !== "string" ||
+    typeof raw.embedding_model !== "string" ||
+    (provider !== "gemini" && provider !== "tei") ||
+    typeof raw.tei_base_url !== "string" ||
+    typeof raw.tei_model !== "string" ||
+    typeof raw.embedding_dim !== "number" ||
+    typeof raw.indexed_dim !== "number" ||
+    typeof raw.indexed_chunk_chars !== "number" ||
+    typeof raw.reindex_required !== "boolean" ||
+    typeof raw.vector_search_active !== "boolean" ||
+    typeof raw.api_key_configured !== "boolean" ||
+    generationModels === null ||
+    generationModels.length === 0 ||
+    embeddingModels === null ||
+    embeddingModels.length === 0 ||
+    providers === null ||
+    providers.length === 0
+  ) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
+
+  return {
+    answer_model: raw.answer_model,
+    query_rewrite_model: raw.query_rewrite_model,
+    embedding_model: raw.embedding_model,
+    embedding_provider: provider,
+    tei_base_url: raw.tei_base_url,
+    tei_model: raw.tei_model,
+    embedding_dim: raw.embedding_dim,
+    indexed_dim: raw.indexed_dim,
+    indexed_chunk_chars: raw.indexed_chunk_chars,
+    expected_chunk_chars:
+      typeof raw.expected_chunk_chars === "number" ? raw.expected_chunk_chars : null,
+    reindex_required: raw.reindex_required,
+    vector_search_active: raw.vector_search_active,
+    api_key_configured: raw.api_key_configured,
+    api_key_hint: typeof raw.api_key_hint === "string" ? raw.api_key_hint : null,
+    embedding_providers: providers,
+    generation_models: generationModels,
+    embedding_models: embeddingModels,
+  };
+}
+
+/** GET /settings 로 현재 설정과 선택지를 받는다. */
+export async function getSettings(signal?: AbortSignal): Promise<SettingsBody> {
+  const payload = await request("/settings", {
+    method: "GET",
+    timeoutMs: SETTINGS_TIMEOUT_MS,
+    signal,
+  });
+  return toSettings(payload);
+}
+
+/**
+ * PATCH /settings 로 넘긴 항목만 저장하고 갱신된 설정을 받는다.
+ * 백엔드가 저장 후의 설정 전체를 돌려주므로 저장 직후 다시 조회할 필요가 없다.
+ */
+export async function updateSettings(
+  updates: SettingsUpdateBody,
+  signal?: AbortSignal,
+): Promise<SettingsBody> {
+  const payload = await request("/settings", {
+    method: "PATCH",
+    body: updates,
+    timeoutMs: SETTINGS_TIMEOUT_MS,
+    signal,
+  });
+  return toSettings(payload);
+}
+
+/**
+ * POST /reindex 로 색인을 비우고 모든 문서를 색인 대기로 되돌린다.
+ * 되돌릴 수 없다. 실제로 다시 쌓는 것은 이어서 부르는 runBatch 다.
+ */
+export async function resetIndex(signal?: AbortSignal): Promise<ReindexSummary> {
+  const payload = await postJson("/reindex", { timeoutMs: REINDEX_TIMEOUT_MS, signal });
+
+  const { provider, dim, chunk_chars: chunkChars, pending, recreated } = payload as Record<string, unknown>;
+  if (
+    typeof provider !== "string" ||
+    typeof dim !== "number" ||
+    typeof chunkChars !== "number" ||
+    toCount(pending) === null ||
+    typeof recreated !== "boolean"
+  ) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
+
+  return { provider, dim, chunk_chars: chunkChars, pending: pending as number, recreated };
 }
 
 /** DELETE /conversations/{id} 로 대화를 지운다. 이미 없는 대화면 false. */

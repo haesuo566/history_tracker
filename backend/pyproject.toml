@@ -9,6 +9,8 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.141.1",
     "google-genai>=2.15.0",
+    # TEI(OpenAI 호환 /v1/embeddings) 호출용. 테스트 클라이언트만 쓰던 dev 의존성에서 옮겨왔다.
+    "httpx>=0.28.1",
     "kiwipiepy>=0.23.2",
     "loguru>=0.7.3",
     "pydantic-settings>=2.14.2",
@@ -26,7 +28,6 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.0",

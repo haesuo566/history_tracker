@@ -32,8 +32,8 @@ flowchart TD
 
     subgraph BATCH["POST /batch — 수동 트리거"]
         F --> G["checked = false 문서 조회"]
-        G --> H["청킹<br/>약 8192자 단위"]
-        H --> I["Gemini 임베딩<br/>문서당 1회 호출"]
+        G --> H["청킹<br/>임베딩 한계에 맞춰"]
+        H --> I["임베딩<br/>Gemini 또는 TEI"]
         I --> J1["chunks<br/>원문 위치"]
         I --> J2["vec_chunks<br/>벡터"]
         I --> J3["chunk_fts<br/>전문 색인"]
@@ -237,19 +237,34 @@ flowchart LR
 
 ### 청킹
 
-`services/chunking.py`. 기준은 `MAX_TOKENS = 2048`, `CHARS_PER_TOKEN = 4` — 즉 **한 청크
-약 8192자**다. 토크나이저를 돌리지 않고 글자 수로 근사한다.
+`services/chunking.py`. 청크 하나의 크기는 **지금 쓰는 임베딩의 입력 한계에서 자동으로 정해진다**
+(`core.model_catalog.chunk_chars_for`). 설정 항목이 아니다.
+
+| 임베딩 | 입력 한계 | 청크 크기 |
+| --- | --- | --- |
+| `gemini-embedding-001` | 2048 토큰 | 2252자 |
+| `gemini-embedding-2` | 8192 토큰 | 9011자 |
+| TEI | `/info`의 `max_input_length` | 그 값 × 1.1 |
+
+한계를 넘겨 보내면 오류가 나는 대신 **뒷부분이 조용히 버려진다**(Gemini도, `auto_truncate`가 기본인
+TEI도 그렇다). 그래서 넘치지 않는 쪽으로 보수적으로 잡는다 — 토크나이저를 로컬에서 돌릴 수 없어
+글자 수로 근사하는데, 한국어는 1.22~3.89 자/토큰이라 가장 촘촘한 경우(1토큰 = 1.1자)를 기준으로
+환산한다. 영어 기준(3~4자/토큰)으로 잡으면 한국어 문서의 뒤가 잘려 나간다.
 
 ```
-        0                8192              16384
-full_text ├────────────────┼────────────────┼──────┤
-          │  청크 0        │  청크 1        │ 청크2 │
+        0              2252              4504
+full_text ├──────────────┼──────────────┼──────┤
+          │  청크 0      │  청크 1      │ 청크2 │
           └─ char_start/char_end 로 위치만 기록
 ```
 
-원래 의도는 8192자 안에서 마지막 개행(`rfind("\n")`)까지만 잘라 문장이 토막나지 않게 하는
+색인 배치는 이 값을 매번 다시 계산하지 않고 색인 상태에 기록된 값(`indexed_chunk_chars`)을 쓴다.
+값을 정하는 것은 재색인(`POST /reindex`)이다 — 배치마다 다시 물으면 같은 색인 안에 경계가 다른
+청크가 섞인다.
+
+원래 의도는 그 길이 안에서 마지막 개행(`rfind("\n")`)까지만 잘라 문장이 토막나지 않게 하는
 것이다. 하지만 앞서 본 대로 본문 추출 단계에서 개행이 공백으로 접히므로 실제 저장된
-`full_text`에는 개행이 없고, 결과적으로 **정확히 8192자마다 끊긴다**. 개행 경계 로직을
+`full_text`에는 개행이 없고, 결과적으로 **정확히 그 길이마다 끊긴다**. 개행 경계 로직을
 살리려면 `content.js`의 `replace(/\s+/g, ' ')`가 개행을 남기도록 바꿔야 한다.
 
 청크는 겹치지 않는다(overlap 0). 경계에 걸친 문맥은 두 청크로 갈린다.
@@ -263,8 +278,15 @@ embed_texts([f"{document.title}\n{chunk.text}" for chunk in chunks])
 - 한 문서의 모든 청크를 **한 번의 API 호출**로 임베딩한다. 청크가 많은 문서일수록 이득이 크다.
 - 각 청크 앞에 **문서 제목을 붙여서** 임베딩한다. 본문 중간 청크만 떼어놓으면 무슨 글의
   일부인지 알 수 없어, 제목이 그 맥락을 준다.
-- 모델 `EMBEDDING_MODEL`(기본 `gemini-embedding-001`), 차원 `EMBEDDING_DIM`(기본 `3072`),
-  `task_type="RETRIEVAL_DOCUMENT"`. 검색 질의 쪽은 `RETRIEVAL_QUERY`로 다르게 임베딩한다.
+- 임베딩을 어디서 받는지는 설정이 정한다(설정 화면의 '제공자', 기본은 Gemini).
+  - **Gemini** — 모델 `EMBEDDING_MODEL`(기본 `gemini-embedding-001`), 차원 `EMBEDDING_DIM`(기본
+    `3072`), `task_type="RETRIEVAL_DOCUMENT"`. 검색 질의 쪽은 `RETRIEVAL_QUERY`로 다르게 임베딩한다.
+  - **TEI** — 자체 호스팅 서버의 OpenAI 호환 경로(`POST /v1/embeddings`)로 보낸다. 차원은 서버에
+    올린 모델이 정하고, `task_type`에 해당하는 개념이 없어 문서와 질의를 같은 방식으로 보낸다.
+    청크는 32개씩 잘라 보낸다(TEI의 `--max-client-batch-size` 기본값).
+- 제공자나 모델을 바꾸면 이미 쌓인 벡터는 다른 공간의 좌표가 되어 쓸 수 없다. `POST /reindex`로
+  색인을 비우고 다시 쌓아야 하며, 그 전까지 검색은 벡터 쪽을 건너뛴다. 자세한 내용은
+  [README의 임베딩 제공자](../README.md#6-임베딩-제공자-gemini-또는-tei)를 참고한다.
 - 전문 색인(`chunk_fts`)에는 제목을 붙이지 않은 청크 본문만 넣는다.
 
 ### 세 테이블에 나눠 쓰기

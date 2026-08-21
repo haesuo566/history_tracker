@@ -5,7 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
-from backend.api.routes import batch, chat, collect, conversation, health
+from backend.api.routes import batch, chat, collect, conversation, health, reindex
+from backend.api.routes import settings as settings_route
 from backend.core.config import settings
 from backend.core.logging import setup_logging
 from backend.db.init_db import init_db
@@ -49,3 +50,5 @@ app.include_router(collect.router)
 app.include_router(batch.router)
 app.include_router(chat.router)
 app.include_router(conversation.router)
+app.include_router(settings_route.router)
+app.include_router(reindex.router)

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { BatchButton, BatchResult } from "@/components/chat/BatchControl";
@@ -8,6 +9,23 @@ import { ChatSidebar } from "@/components/chat/ChatSidebar";
 import { MessageList } from "@/components/chat/MessageList";
 import { useBatch } from "@/hooks/useBatch";
 import { useChatSessions } from "@/hooks/useChatSessions";
+
+function GearIcon() {
+  // 톱니를 몸통에 붙인 형태로 그린다. 원 하나에 짧은 선 여덟 개를 두면 해 모양으로 읽혀
+  // 테마 전환 버튼으로 오인된다.
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-4">
+      <path
+        d="M6.9 1.9h2.2l.3 1.5 1.1.6 1.4-.6 1.1 1.9-1.1 1v1.2l1.1 1-1.1 1.9-1.4-.6-1.1.6-.3 1.5H6.9l-.3-1.5-1.1-.6-1.4.6-1.1-1.9 1.1-1V7.3l-1.1-1L4.1 4.4l1.4.6 1.1-.6.3-1.5Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinejoin="round"
+      />
+      <circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
 
 function SidebarOpenIcon() {
   return (
@@ -105,6 +123,13 @@ export function ChatContainer() {
             </span>
           )}
           <BatchButton status={batch.status} onRun={() => void batch.run()} />
+          <Link
+            href="/settings"
+            aria-label="설정"
+            className="shrink-0 rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+          >
+            <GearIcon />
+          </Link>
         </header>
 
         {batch.summary !== null && (

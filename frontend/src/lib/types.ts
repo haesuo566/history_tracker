@@ -68,3 +68,77 @@ export interface ConversationDetailBody {
   conversation_id: string;
   messages: { role: string; content: string }[];
 }
+
+/** 설정 화면의 모델 선택지 한 줄. 임베딩 제공자 선택지도 같은 형태다. */
+export interface ModelOption {
+  id: string;
+  label: string;
+}
+
+/** 임베딩을 어디서 받아오는지. 백엔드 EmbeddingProvider 와 같은 값이다. */
+export type EmbeddingProvider = "gemini" | "tei";
+
+/**
+ * GET·PATCH /api/settings 응답 본문. 백엔드 SettingsResponse 를 그대로 옮긴 형태다.
+ *
+ * 다른 응답들과 달리 camelCase 로 바꾸지 않는다. 여덟 필드 전부를 화면이 쓰므로 버릴 것이 없고,
+ * 경계마다 이름만 바꿔 옮기면 필드를 더할 때 고칠 자리가 늘기만 한다.
+ *
+ * API key 원문은 이 응답에 없다. 저장돼 있는지(api_key_configured)와 끝 네 자리 힌트만 온다.
+ */
+export interface SettingsBody {
+  answer_model: string;
+  query_rewrite_model: string;
+  embedding_model: string;
+  embedding_provider: EmbeddingProvider;
+  tei_base_url: string;
+  /** TEI 는 서버에 올린 모델을 쓰므로 비워 둘 수 있다. */
+  tei_model: string;
+  /** Gemini 경로에서 요청하는 차원(.env 고정). TEI 경로에서는 쓰이지 않는다. */
+  embedding_dim: number;
+  /** 지금 색인에 들어 있는 벡터의 차원. 제공자를 바꿔 재색인했다면 위 값과 다르다. */
+  indexed_dim: number;
+  /** 지금 색인의 청크가 몇 글자로 잘려 있는지. */
+  indexed_chunk_chars: number;
+  /** 지금 설정대로 색인하면 쓸 청크 크기. TEI 는 서버에 물어야 알 수 있어 null 이다. */
+  expected_chunk_chars: number | null;
+  /** 색인을 다시 만들어야 지금 설정대로 동작하면 true. */
+  reindex_required: boolean;
+  /** 벡터 검색이 지금 동작하는지. false 면 본문 단어 검색만으로 답하고 있다. */
+  vector_search_active: boolean;
+  api_key_configured: boolean;
+  api_key_hint: string | null;
+  embedding_providers: ModelOption[];
+  generation_models: ModelOption[];
+  embedding_models: ModelOption[];
+}
+
+/**
+ * PATCH /api/settings 요청 본문. 바꾸려는 항목만 담는다.
+ * 화면은 저장된 API key 원문을 모르므로, 키를 새로 입력하지 않은 저장에서는 gemini_api_key 를
+ * 아예 빼서 보낸다. 빈 문자열을 보내면 백엔드가 거부한다.
+ */
+export interface SettingsUpdateBody {
+  answer_model?: string;
+  query_rewrite_model?: string;
+  embedding_model?: string;
+  embedding_provider?: EmbeddingProvider;
+  tei_base_url?: string;
+  tei_model?: string;
+  gemini_api_key?: string;
+}
+
+/**
+ * POST /api/reindex 응답 본문.
+ * 색인을 비우기만 하므로, 실제로 다시 쌓으려면 이어서 색인(POST /api/batch)을 돌려야 한다.
+ */
+export interface ReindexSummary {
+  provider: string;
+  dim: number;
+  /** 앞으로 청크 하나에 담을 문자 수. */
+  chunk_chars: number;
+  /** 다시 쌓아야 하는 문서 수. */
+  pending: number;
+  /** 차원이 바뀌어 벡터 테이블을 다시 만들었는지. */
+  recreated: boolean;
+}
