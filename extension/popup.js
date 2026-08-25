@@ -5,7 +5,7 @@ function applyTrackingState(enabled) {
   $('statusCard').classList.toggle('is-off', !enabled);
   $('trackingLabel').textContent = enabled ? '수집 중' : '수집 꺼짐';
   $('trackingSub').textContent = enabled
-    ? '방문이 끝나면 서버로 전송합니다'
+    ? '페이지를 열면 본문을 수집해 전송합니다'
     : '새 방문을 기록하지 않습니다';
 }
 
@@ -28,7 +28,6 @@ async function render() {
   queueBadge.textContent = queue.length;
   queueBadge.classList.toggle('is-warn', queue.length > 0);
 
-  setText('minDwell', formatDwell(await readMinDwellSeconds()));
   setText('endpoint', apiEndpoint ? `${apiEndpoint.replace(/\/$/, '')}/collect` : '미설정');
   setText('deviceId', deviceId || '-');
   $('version').textContent = `v${chrome.runtime.getManifest().version}`;

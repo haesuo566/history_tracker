@@ -23,8 +23,8 @@
 ### 데이터 흐름
 
 ```
-[Chrome 확장]  방문 종료 시점에 즉시 전송
-     │  POST /collect  { url, title, startTime, endTime, content }
+[Chrome 확장]  본문 추출 직후 즉시 전송
+     │  POST /collect  { url, title, startTime, content }
      ▼
 [documents]  본문 SHA-256 해시로 중복 제거, checked = false 로 적재
      │
@@ -110,7 +110,7 @@ uv run uvicorn backend.main:app --reload
 
 1. `chrome://extensions` → 우측 상단 "개발자 모드" 켜기
 2. "압축해제된 확장 프로그램을 로드합니다" → `extension` 폴더 선택
-3. 확장 아이콘 → "설정 열기" → API 서버 주소(`http://127.0.0.1:8000`)와 최소 체류시간 저장
+3. 확장 아이콘 → "설정 열기" → API 서버 주소(`http://127.0.0.1:8000`) 저장
 
 설정값과 제약은 [`extension/README.md`](extension/README.md) 참고.
 
@@ -232,7 +232,7 @@ bge-m3 를 기준으로 맞춰 두었습니다. 다른 모델을 쓸 때 걸리�
 | 메서드 | 경로 | 요청 | 응답 |
 | --- | --- | --- | --- |
 | `GET` | `/health` | — | `{ "status": "ok" }` |
-| `POST` | `/collect` | `url`, `title`, `startTime`, `endTime`, `content` | `{ "status": "ok" }` |
+| `POST` | `/collect` | `url`, `title`, `startTime`, `content` | `{ "status": "ok" }` |
 | `POST` | `/batch` | 없음 | `{ "attempted": 3, "succeeded": 3, "failed": 0 }` |
 | `POST` | `/chat` | `{ "message": "...", "conversation_id": "..." \| null }` | `{ conversation_id, results: [{ document_id, url, title, score, snippet }], answer }` |
 | `GET` | `/conversations` | `limit` (기본 50, 최대 200) | `{ "conversations": [{ conversation_id, title, message_count, created_at, last_message_at }] }` |

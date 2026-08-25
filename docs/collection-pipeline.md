@@ -7,7 +7,7 @@
 
 | 단계 | 파일 |
 | --- | --- |
-| 방문 감지 · 전송 | `extension/background.js`, `extension/dwell.js` |
+| 수집 · 전송 | `extension/background.js` |
 | 본문 추출 | `extension/content.js` (+ `extension/Readability.js`) |
 | 수신 · 저장 | `api/routes/collect.py`, `services/document.py`, `models/document.py` |
 | 색인 | `api/routes/batch.py`, `services/indexing.py`, `services/chunking.py`, `services/embedding.py` |
@@ -19,9 +19,9 @@
 ```mermaid
 flowchart TD
     subgraph EXT["Chrome 확장 (Manifest V3)"]
-        A["브라우저 이벤트<br/>탭 전환 · 이동 · 포커스 · idle"] --> B["background.js<br/>방문 세션 1건 유지"]
-        C["content.js<br/>Readability 본문 추출"] -->|PAGE_CONTENT| B
-        B -->|"방문 종료 시점"| D{"체류시간 ≥<br/>max(0.5초, 설정값)"}
+        A["페이지 로드 완료<br/>또는 SPA 라우팅"] --> C["content.js<br/>Readability 본문 추출"]
+        C -->|PAGE_CONTENT| B["background.js"]
+        B --> D{"수집 토글 켜짐?"}
         D -->|아니오| X["버림"]
         D -->|예| E["POST /collect"]
         E -->|실패| Q["재시도 큐<br/>30초마다 재전송"]
@@ -49,91 +49,81 @@ flowchart TD
 
 ---
 
-## 1단계 — 방문 감지 (`background.js`)
+## 1단계 — 수집 트리거와 전송 (`background.js`)
 
-### 어느 페이지를 "보고 있는 중"으로 볼 것인가
+### 트리거는 하나뿐이다
 
-확장은 **전역에 방문 세션 딱 하나**만 유지한다. 열려 있는 탭이 몇 개든, 세 조건을 모두 만족하는
-탭 하나만 추적한다(`computeQualifyingTab`).
+background가 하는 일은 **`content.js`가 보낸 `PAGE_CONTENT`를 받아 그대로 POST하는 것**뿐이다.
+브라우저 이벤트를 보고 "지금 보고 있는 페이지"를 판정하지 않는다.
 
 ```
-수집 토글이 켜져 있고 (trackingEnabled)
-        ∧  사용자가 idle 상태가 아니고 (idle.queryState === 'active', 감지 간격 60초)
-        ∧  포커스된 일반 창이 있으며 (windows.WINDOW_ID_NONE 아님)
-        →  그 창의 활성 탭이 URL 이 http/https 이면 추적 대상
+PAGE_CONTENT 도착
+   │
+   ├─ url 이 http/https 아님        →  버림
+   ├─ 수집 토글 꺼짐 (trackingEnabled) →  버림
+   └─ 그 외                         →  POST /collect
 ```
 
-배경 탭에서 도는 페이지, 창을 내려둔 동안, 자리를 비운 동안은 세션이 열리지 않는다. 즉
-기록되는 시간은 "탭이 열려 있던 시간"이 아니라 **실제로 화면에 두고 보던 시간**에 가깝다.
+조건이 이 둘뿐이라 **열린 페이지는 전부 수집된다.** 배경 탭에서 로드된 페이지, 포커스가
+없는 창의 페이지도 들어온다. 뒤집어 말하면 링크를 새 탭으로 열어두기만 하고 보지 않은
+페이지도 기록에 남는다. 로컬 검색용 아카이브라 놓치는 쪽보다 더 모으는 쪽을 택한 결과다.
 
-세션 상태는 `chrome.storage.session`에 둔다. Manifest V3 서비스워커는 유휴 시 종료되고
-필요할 때 다시 깨어나므로, 전역 변수에 두면 진행 중이던 방문이 사라진다.
-
-### 세션 전이
-
-아래 이벤트가 오면 전부 `refreshSession()` 하나로 모인다. 대상 탭이 직전 세션과
-`(tabId, url)`이 같으면 아무 일도 일어나지 않고, 다르면 **기존 세션을 끝내고(전송) 새 세션을 연다**.
-
-```mermaid
-stateDiagram-v2
-    [*] --> 없음
-    없음 --> 추적중 : 조건 만족 탭 발견<br/>startTime 기록
-    추적중 --> 추적중 : 같은 탭·같은 URL<br/>(변화 없음)
-    추적중 --> 전송 : 탭 전환 / 페이지 이동 /<br/>창 포커스 이동 / idle 진입 /<br/>탭 닫힘 / 수집 토글 끔
-    전송 --> 추적중 : 새 대상 탭이 있으면
-    전송 --> 없음 : 대상 탭이 없으면
-```
+토글은 전역 변수에 캐시하지 않고 쓸 때마다 `storage.local`에서 읽는다. Manifest V3
+서비스워커는 유휴 시 종료되고 메시지가 오면 다시 깨어나는데, 캐시해 두면 깨어난 직후
+초기화가 끝나기 전에 도착한 메시지가 기본값(켜짐)으로 처리된다.
 
 | 이벤트 | 리스너 | 하는 일 |
 | --- | --- | --- |
-| 페이지 이동 | `webNavigation.onCommitted` (메인 프레임만) | 세션 교체 |
-| SPA 라우팅 | `webNavigation.onHistoryStateUpdated` | 세션 교체 + 800ms 뒤 본문 재추출 요청 |
-| 탭 전환 | `tabs.onActivated` | 세션 교체 |
-| 창 포커스 변경 | `windows.onFocusChanged` | 세션 교체 또는 종료 |
-| idle 진입/복귀 | `idle.onStateChanged` | 세션 종료 또는 시작 |
-| 탭 닫힘 | `tabs.onRemoved` | 그 탭의 세션이면 종료 |
-| 제목 확정 | `tabs.onUpdated` | 세션의 `title` 갱신 |
-| 수집 토글 | `storage.onChanged` | 끄는 즉시 진행 중 세션 종료 |
+| 본문 도착 | `runtime.onMessage` (`PAGE_CONTENT`) | 검사 후 즉시 전송 |
+| SPA 라우팅 | `webNavigation.onHistoryStateUpdated` | 800ms 뒤 본문 재추출 요청 |
+| 재시도 알람 | `alarms.onAlarm` | 실패 큐 재전송 |
+| 설치/업데이트 | `runtime.onInstalled` | 기본값 채우기, 폐기된 키 정리 |
 
-제목을 `onUpdated`에서 따로 잡는 이유는 `onCommitted` 시점엔 아직 제목이 비어 있는 경우가
-많기 때문이다. 이때 `session.url === tab.url` 확인이 반드시 필요하다 — 같은 탭에서 다음
-페이지로 넘어간 뒤 도착한 제목이 아직 안 닫힌 이전 세션에 들어가면, 전송 레코드의 제목과
-URL이 서로 다른 페이지를 가리키게 된다.
+### 왜 방문이 끝날 때가 아니라 시작할 때 보내는가
 
-### 체류시간 필터
+이전 구조는 방문 세션을 하나 유지하면서 본문을 세션 객체에 담아두고, 방문이 끝나는
+시점(탭 전환·포커스 이동·idle 진입·탭 닫힘)에 체류시간과 함께 전송했다. 이 구조에는
+본문이 조용히 사라지는 경로가 여러 개 있었다.
 
-세션이 끝나면(`finalizeSession`) 먼저 체류시간을 본다.
+- 본문을 세션에 붙일 때 `(tabId, url)`을 엄격히 비교했다. 페이지가 `history.replaceState`로
+  추적 파라미터를 정리하거나 리다이렉트가 끼면 URL이 어긋나 본문이 폐기됐다.
+- 새 세션을 열기 전에 이전 세션의 전송(`fetch`)을 `await` 했다. 서버가 느리면 그 사이 도착한
+  본문이 아직 열리지 않은 세션을 만나 폐기됐다.
+- 제목 갱신 핸들러와 본문 핸들러가 같은 세션 객체를 각자 읽고 썼다. 순서가 엇갈리면
+  제목 쓰기가 본문을 덮었다.
+- 로드가 느린 페이지를 먼저 떠나면 본문 없이 전송됐고, 브라우저를 그냥 종료하면 방문 자체가
+  통째로 유실됐다.
 
-```
-duration = endTime - startTime
-threshold = max(500ms, minDwellSeconds × 1000)
-
-duration < threshold  →  전송하지 않고 버림
-```
-
-`minDwellSeconds`는 사용자가 옵션 페이지에서 정한다(기본 `0` = 필터 없음). 설정과 무관하게
-**0.5초 미만은 항상 버린다** — 탭을 훑고 지나갈 때 생기는 튐이라 기록할 가치가 없다.
-값은 초 단위로 저장하고, 초 단위 지원 이전 버전이 쓰던 `minDwellMinutes`는 설치 시점에
-초로 환산해 옮긴다(`dwell.js`).
+체류시간을 쓰지 않기로 하면서 방문 종료 시점을 붙잡을 이유가 없어졌고, 본문을 들고 있는
+구간이 사라져 위 경로가 전부 없어졌다. `computeQualifyingTab`·`refreshSession`·
+`finalizeSession`과 `storage.session` 상태, `idle`/`tabs` 권한도 함께 걷어냈다.
 
 ### 전송과 재시도
 
-임계값을 넘긴 방문은 **그 즉시** POST 한다. 주기 배치가 아니다.
+받은 본문은 **그 즉시** POST 한다. 주기 배치가 아니다.
 
 ```json
 POST {apiEndpoint}/collect
 {
   "url":       "https://example.com/article",
   "title":     "페이지 제목",
-  "startTime": "2026-08-13T12:00:00.000Z",
-  "endTime":   "2026-08-13T12:03:20.000Z",
+  "startTime": "2026-08-24T12:00:00.000Z",
   "content":   "추출된 본문 텍스트 …"
 }
 ```
 
+`startTime`은 본문을 추출해 전송한 시각이다. 체류시간은 재지 않으므로 `endTime`도 없다.
+
 전송이 실패하면(오프라인, 서버 다운) 그 레코드만 `chrome.storage.local`의 `queue`에 쌓고,
 `chrome.alarms`로 **30초마다** 큐 전체를 다시 시도한다. 성공한 건은 큐에 들어가지 않고,
-재시도에서 성공한 건만 큐에서 빠진다.
+재시도에서 성공한 건만 그때그때 큐에서 빠진다 — 큐를 미리 비워두고 돌리면 도중에
+서비스워커가 종료될 때 아직 못 보낸 건까지 함께 사라진다.
+
+큐는 storage 를 읽고 고쳐 다시 쓰는 방식이라 여러 페이지가 동시에 실패하면 서로의 쓰기를
+덮어쓴다. 전송이 페이지 단위로 병렬이 된 지금은 실제로 부딪히므로 큐에 손대는 구간만
+프라미스 체인으로 직렬화한다. 항목 수는 **300건**으로 제한하고 넘치면 오래된 것부터
+버린다 — 항목마다 본문 전체가 들어가서, 서버를 꺼둔 채로 오래 브라우징하면
+`storage.local` 용량(확장 기본 약 10MB)을 넘겨 저장 자체가 실패한다.
 
 ---
 
@@ -151,16 +141,22 @@ document 복제
    ▼
 연속 공백(\s+)을 공백 한 칸으로 접고 trim
    ▼
+직전 전송분과 (url, 본문)이 같으면 여기서 중단
+   ▼
 runtime.sendMessage({ type: 'PAGE_CONTENT', url, title, text })
 ```
 
-background는 이 메시지를 받아 **세션의 `tabId`와 `url`이 메시지와 모두 일치할 때만** 본문을
-세션에 반영한다. 엉뚱한 탭의 본문이 지금 세션에 붙는 것을 막기 위한 것이지만, 그 대가로
-페이지 로드가 방문 종료보다 늦으면 본문이 붙지 못하고 `content: ""`로 전송된다.
+추출 시점은 `window.load` 이후다(`document_idle`에 주입되므로 대개 이미 지나 있다). background가
+본문을 들고 있지 않고 받는 즉시 보내므로, 로드가 늦어도 방문을 먼저 떠났다고 본문이
+버려지지는 않는다. 다만 로드가 끝나지 않는 페이지는 아예 수집되지 않는다.
 
 SPA(`history.pushState`) 라우팅은 실제 문서 로드가 아니라서 콘텐츠 스크립트가 다시 주입되지
 않는다. 그래서 라우팅을 감지하면 800ms 뒤에 `REQUEST_CONTENT`를 보내 재추출을 요청한다.
 렌더링이 800ms보다 늦게 끝나는 페이지는 이전 화면의 본문이 잡힐 수 있다.
+
+한 문서에서 여러 번 보낼 수 있게 되었으므로(초기 로드 + 재추출 요청) 직전에 보낸
+`(url, 본문)`을 기억해두고 같은 내용이면 보내지 않는다. 서버도 해시로 중복을 걸러내지만
+굳이 왕복할 필요가 없다.
 
 > **주의**: 이 단계에서 개행까지 공백으로 접히기 때문에, 저장되는 `full_text`에는 `\n`이 없다.
 > 뒤의 청킹이 개행 경계를 찾도록 되어 있지만 실제로는 걸릴 개행이 없어 글자 수 하드 컷으로
@@ -202,11 +198,12 @@ URL을 섞으면 "같은 URL의 같은 본문"만 중복으로 본다. 뒤집어
 | `title` | `documents.title` |
 | `content` | `documents.full_text` |
 | `startTime` | `documents.timestamp` |
-| `endTime` | **저장하지 않음** |
 
-`endTime`은 확장이 보내지만 스키마에 받는 칸이 없다. 즉 체류시간은 확장 쪽 임계값 필터에만
-쓰이고 서버에는 남지 않으므로, "오래 본 페이지 위주로 찾기" 같은 건 지금 구조로는 불가능하다.
+체류시간은 수집하지 않으므로 "오래 본 페이지 위주로 찾기" 같은 건 지금 구조로는 불가능하다.
 확장이 `deviceId`를 만들어 두기는 하지만 전송 레코드에 실리지 않아 기기 구분도 없다.
+
+구버전 확장의 재시도 큐에 남아 나중에 올라오는 레코드는 `endTime`을 싣고 있는데, pydantic이
+스키마에 없는 필드를 무시하므로 그대로 받아들여진다.
 
 행이 만들어질 때 `document_id`(UUID)가 붙고 `checked`는 `false`로 들어간다. 이 `checked`가
 색인 대기 표시다.
@@ -361,7 +358,7 @@ erDiagram
         string title
         text full_text "본문 원본 — 청크가 가리키는 대상"
         string hash UK "sha256(url + content)"
-        datetime timestamp "방문 시작 시각"
+        datetime timestamp "본문 추출 시각"
         bool checked "색인 완료 여부"
     }
     chunks {
@@ -391,15 +388,16 @@ erDiagram
 
 | 단계 | 조건 | 결과 |
 | --- | --- | --- |
-| 방문 감지 | 배경 탭 · 창 미포커스 · idle · 수집 토글 끔 | 세션이 열리지 않음 |
-| 방문 감지 | 0.5초 미만 체류 | 항상 버림 |
-| 방문 감지 | `minDwellSeconds` 미달 | 버림 |
-| 방문 감지 | 시크릿 모드에서 "허용"을 켜지 않음 | 수집 안 됨 |
-| 본문 추출 | 로드가 방문 종료보다 늦음 | `content: ""`로 전송 |
+| 수집 | 수집 토글 끔 | 버림 |
+| 수집 | http/https 아닌 URL | 버림 |
+| 수집 | 시크릿 모드에서 "허용"을 켜지 않음 | 수집 안 됨 |
+| 본문 추출 | `window.load`가 끝나지 않는 페이지 | 수집 안 됨 |
+| 본문 추출 | 본문이 iframe 안에 있음 (메인 프레임만 주입) | `content: ""`로 전송 |
+| 본문 추출 | Readability 실패 + `body.innerText`도 빈약 | 본문이 빈약하게 전송 |
 | 본문 추출 | SPA 렌더링이 800ms보다 늦음 | 이전 화면 본문이 실릴 수 있음 |
 | 전송 | 서버 다운 · 오프라인 | 재시도 큐에 남아 30초마다 재시도 |
+| 전송 | 재시도 큐가 300건 초과 | 오래된 건부터 버림 |
 | 저장 | 같은 URL + 같은 본문 | 무시(중복) |
-| 저장 | — | `endTime` 은 버려짐 |
 | 색인 | `/batch`를 돌리지 않음 | 검색되지 않음 |
 | 색인 | 본문이 비어 있음 | 청크 0개, 검색되지 않음 |
 | 색인 | 임베딩 실패 | 롤백 후 다음 배치에서 재시도 |

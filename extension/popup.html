@@ -40,7 +40,7 @@
       <span class="status-dot" aria-hidden="true"></span>
       <div class="status-text">
         <div class="status-title" id="trackingLabel">수집 중</div>
-        <div class="status-sub" id="trackingSub">방문이 끝나면 서버로 전송합니다</div>
+        <div class="status-sub" id="trackingSub">페이지를 열면 본문을 수집해 전송합니다</div>
       </div>
       <label class="switch">
         <input type="checkbox" id="trackingToggle" aria-label="수집 켜기/끄기" />
@@ -49,10 +49,6 @@
     </div>
 
     <dl class="info-list">
-      <div class="info-row">
-        <dt>최소 체류시간</dt>
-        <dd id="minDwell">-</dd>
-      </div>
       <div class="info-row">
         <dt>재전송 대기</dt>
         <dd><span class="badge" id="queueCount">-</span></dd>
@@ -70,7 +66,6 @@
     <button type="button" class="btn btn-ghost btn-block" id="openOptions">설정 열기</button>
   </div>
 
-  <script src="dwell.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

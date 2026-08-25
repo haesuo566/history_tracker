@@ -33,14 +33,10 @@
       margin: 0 0 14px;
     }
 
-    .field + .field { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--border); }
-
     .field-label { display: block; font-size: 13.5px; font-weight: 600; margin-bottom: 3px; }
     .field-hint { margin: 0 0 9px; font-size: 12.5px; color: var(--text-dim); }
 
-    input[type='url'],
-    input[type='number'],
-    select {
+    input[type='url'] {
       font: inherit;
       font-size: 13.5px;
       color: var(--text);
@@ -48,45 +44,19 @@
       border: 1px solid var(--border-strong);
       border-radius: var(--radius);
       padding: 9px 11px;
+      width: 100%;
       transition: border-color 0.14s ease, box-shadow 0.14s ease;
     }
 
-    input:focus,
-    select:focus {
+    input:focus {
       outline: none;
       border-color: var(--accent);
       box-shadow: 0 0 0 3px var(--accent-soft);
     }
 
-    input[type='url'] { width: 100%; }
     input[type='url'].is-invalid { border-color: var(--danger); }
 
-    .input-group { display: flex; gap: 8px; }
-    .input-group input { width: 130px; text-align: right; font-variant-numeric: tabular-nums; }
-    .input-group select { min-width: 76px; cursor: pointer; }
-
-    .field-note { margin: 9px 0 0; font-size: 12.5px; color: var(--text-dim); }
-    .field-note strong { color: var(--text); font-weight: 620; }
     .field-error { margin: 7px 0 0; font-size: 12.5px; color: var(--danger); min-height: 1em; }
-
-    .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-    .chip {
-      font: inherit;
-      font-size: 12px;
-      padding: 4px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border-strong);
-      background: var(--bg);
-      color: var(--text-dim);
-      cursor: pointer;
-      transition: background 0.14s ease, color 0.14s ease, border-color 0.14s ease;
-    }
-    .chip:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-    .chip[aria-pressed='true'] {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
 
     .actions { display: flex; align-items: center; gap: 12px; }
 
@@ -124,7 +94,7 @@
         <span class="status-dot" aria-hidden="true"></span>
         <div class="status-text">
           <div class="status-title" id="trackingLabel">수집 중</div>
-          <div class="status-sub" id="trackingSub">방문이 끝나면 서버로 전송합니다</div>
+          <div class="status-sub" id="trackingSub">페이지를 열면 본문을 수집해 전송합니다</div>
         </div>
         <label class="switch">
           <input type="checkbox" id="trackingToggle" aria-label="수집 켜기/끄기" />
@@ -144,30 +114,6 @@
         <input type="url" id="endpoint" placeholder="https://your-api.example.com"
                spellcheck="false" autocomplete="off" />
         <p class="field-error" id="endpointError"></p>
-      </div>
-
-      <div class="field">
-        <label class="field-label" for="dwellValue">최소 체류시간</label>
-        <p class="field-hint">
-          이 시간 이상 머문 방문만 수집됩니다. 0이면 필터 없이 전부 수집합니다.
-        </p>
-        <div class="input-group">
-          <input type="number" id="dwellValue" min="0" step="1" placeholder="0" />
-          <select id="dwellUnit" aria-label="시간 단위">
-            <option value="sec">초</option>
-            <option value="min">분</option>
-          </select>
-        </div>
-        <div class="presets" id="presets">
-          <button type="button" class="chip" data-seconds="0">없음</button>
-          <button type="button" class="chip" data-seconds="5">5초</button>
-          <button type="button" class="chip" data-seconds="15">15초</button>
-          <button type="button" class="chip" data-seconds="30">30초</button>
-          <button type="button" class="chip" data-seconds="60">1분</button>
-          <button type="button" class="chip" data-seconds="300">5분</button>
-        </div>
-        <p class="field-note">적용 기준: <strong id="dwellPreview">-</strong></p>
-        <p class="field-note">0.5초 미만 체류는 탭 전환 튐으로 보고 항상 제외됩니다.</p>
       </div>
     </section>
 
@@ -191,7 +137,6 @@
     </section>
   </div>
 
-  <script src="dwell.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -19,8 +19,7 @@ def db():
 
 
 def make_request(url: str, content: str, title: str = "t") -> CollectRequest:
-    now = datetime.now(UTC)
-    return CollectRequest(url=url, title=title, startTime=now, endTime=now, content=content)
+    return CollectRequest(url=url, title=title, startTime=datetime.now(UTC), content=content)
 
 
 def stored_urls(db: Session) -> list[str]:
