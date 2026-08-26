@@ -20,7 +20,8 @@ VECTOR_SEARCH_SQL = text(
     "WHERE embedding MATCH :embedding AND k = :limit AND distance <= :max_distance ORDER BY distance"
 )
 FTS_SEARCH_SQL = text(
-    "SELECT vector_key, rank, body FROM chunk_fts WHERE chunk_fts MATCH :query ORDER BY rank LIMIT :limit"
+    "SELECT vector_key, rank, title, body FROM chunk_fts "
+    "WHERE chunk_fts MATCH :query ORDER BY rank LIMIT :limit"
 )
 
 type ChunkKey = tuple[str, int]
@@ -68,8 +69,13 @@ def _vector_search_if_usable(db: Session, query: str, limit: int) -> list[ChunkK
 
 
 def _fts_search(db: Session, nouns: list[str], limit: int) -> list[ChunkKey]:
-    """명사를 OR로 묶어 매칭하고, 명사 중 실제 본문에 등장한 개수가 required_matches(최소 매칭 단어 수)
-    미만인 결과는 약한 매칭으로 보고 제외한다."""
+    """명사를 OR로 묶어 매칭하고, 명사 중 실제 색인된 글에 등장한 개수가 required_matches(최소 매칭
+    단어 수) 미만인 결과는 약한 매칭으로 보고 제외한다.
+
+    등장 여부는 제목과 청크 본문을 합쳐서 센다. 색인이 둘을 함께 매칭하므로(chunk_fts 는 title 과
+    body 를 모두 인덱스한다) 여기서 본문만 보면, 제목으로 걸린 결과가 매칭 0개로 세어져 전부
+    걸러진다.
+    """
     if not nouns:
         return []
 
@@ -78,8 +84,9 @@ def _fts_search(db: Session, nouns: list[str], limit: int) -> list[ChunkKey]:
     required_matches = min(settings.min_fts_matched_terms, len(nouns))
 
     fts_keys: list[ChunkKey] = []
-    for vector_key, _rank, body in fts_hits:
-        matched_terms = sum(1 for noun in nouns if noun.lower() in body.lower())
+    for vector_key, _rank, title, body in fts_hits:
+        haystack = f"{title}\n{body}".lower()
+        matched_terms = sum(1 for noun in nouns if noun.lower() in haystack)
         if matched_terms < required_matches:
             continue
         document_id, seq = vector_key.rsplit(":", 1)

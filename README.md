@@ -26,7 +26,7 @@
 [Chrome 확장]  본문 추출 직후 즉시 전송
      │  POST /collect  { url, title, startTime, content }
      ▼
-[documents]  본문 SHA-256 해시로 중복 제거, checked = false 로 적재
+[documents]  URL SHA-256 해시로 중복 제거(URL 하나 = 문서 하나), checked = false 로 적재
      │
      │  POST /batch  (수동 트리거 — 프론트엔드의 색인 버튼 또는 직접 호출)
      ▼

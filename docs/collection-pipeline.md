@@ -155,7 +155,7 @@ SPA(`history.pushState`) 라우팅은 실제 문서 로드가 아니라서 콘�
 렌더링이 800ms보다 늦게 끝나는 페이지는 이전 화면의 본문이 잡힐 수 있다.
 
 한 문서에서 여러 번 보낼 수 있게 되었으므로(초기 로드 + 재추출 요청) 직전에 보낸
-`(url, 본문)`을 기억해두고 같은 내용이면 보내지 않는다. 서버도 해시로 중복을 걸러내지만
+`(url, 본문)`을 기억해두고 같은 내용이면 보내지 않는다. 서버도 URL 해시로 중복을 걸러내지만
 굳이 왕복할 필요가 없다.
 
 > **주의**: 이 단계에서 개행까지 공백으로 접히기 때문에, 저장되는 `full_text`에는 `\n`이 없다.
@@ -174,21 +174,47 @@ SPA(`history.pushState`) 라우팅은 실제 문서 로드가 아니라서 콘�
 같은 페이지를 여러 번 방문하면 매번 `/collect`가 불린다. 이를 걸러내는 키가 `hash`다.
 
 ```
-hash = SHA-256( f"{url}\n{content}" )
+hash = SHA-256(url)
 
 INSERT INTO documents (...) VALUES (...)
   ON CONFLICT (hash) DO NOTHING
 ```
 
-**URL과 본문을 함께 해싱한다.** 본문만으로 해싱하면 두 가지가 깨진다.
+**URL 하나가 문서 하나다.** 본문은 해시에 넣지 않는다. 예전에는 `sha256(url + content)`였는데,
+그러면 같은 URL을 다시 방문할 때마다 새 문서가 쌓였다. 광고·추천 목록·조회수처럼 본문 추출에
+딸려 들어오는 자리가 방문마다 조금씩 달라서, 실제로는 같은 페이지인데 검색 결과를 여러 행이
+나눠 차지했다. 구글 검색결과 한 페이지가 본문 878자와 894자 차이로 네 행이 된 식이다.
 
-1. 본문 추출이 실패해 `content`가 `""`인 페이지들이 전부 `sha256("")`으로 충돌한다. 첫 한 건이
-   그 해시를 선점한 뒤로는 본문 없는 모든 페이지가 조용히 버려진다.
-2. 기사 신디케이션처럼 본문이 똑같은 별개 URL이 한 건으로 뭉개진다.
+그 대가로 **처음 수집한 본문이 그대로 굳는다.**
 
-URL을 섞으면 "같은 URL의 같은 본문"만 중복으로 본다. 뒤집어 말하면 **내용이 바뀐 페이지를
-다시 방문하면 새 문서로 한 건 더 쌓인다.** 뉴스 메인처럼 자주 바뀌는 페이지는 방문할 때마다
-행이 늘어난다.
+- 내용이 갱신된 기사를 다시 방문해도 예전 본문이 남는다.
+- 첫 수집이 빈 본문이었다면(iframe 사이트, 로그인 페이지 등) 그 URL은 계속 빈 채로 남아
+  검색에 걸리지 않는다.
+
+최신 본문으로 덮어쓰려면 `full_text`가 바뀌는 순간 이미 쌓인 그 문서의 청크·벡터·전문 색인이
+가리키는 위치가 어긋나므로, 문서 단위로 색인을 버리고 `checked`를 되돌려야 한다. 로컬 검색용
+아카이브에서 그만한 값이 없다고 보고 택하지 않았다.
+
+URL 정규화는 하지 않는다. `#` 프래그먼트나 `utm_*` 같은 추적 파라미터가 붙으면 같은 페이지도
+다른 URL로 취급되어 별개 행이 된다.
+
+### 옛 해시 정리 (`db/init_db.py`)
+
+이미 쌓인 행은 옛 해시를 들고 있어서, 그냥 두면 같은 URL이 새 방식으로 한 번 더 들어온다.
+`hash`에 unique 제약이 걸려 있으므로 재계산 전에 URL 중복부터 정리한다.
+
+```
+URL 중복 중 가장 오래된 행만 남김  (재방문분을 무시하는 것과 같은 규칙)
+   ▼
+지워지는 문서의 chunks · vec_chunks · chunk_fts 도 함께 삭제
+   ▼
+남은 행 전부 hash = SHA-256(url) 로 UPDATE
+   ▼
+app_settings['documents_hash_scheme'] = 'url'  (다음 기동부터 건너뜀)
+```
+
+`documents` 전체를 훑는 작업이라 표시를 남겨 한 번만 돌린다. 마이그레이션 도구가 없어
+`_ensure_column`과 같은 자리에서 처리한다.
 
 ### 저장되는 것 / 안 되는 것
 
@@ -248,8 +274,28 @@ TEI도 그렇다). 그래서 넘치지 않는 쪽으로 보수적으로 잡는�
 글자 수로 근사하는데, 한국어는 1.22~3.89 자/토큰이라 가장 촘촘한 경우(1토큰 = 1.1자)를 기준으로
 환산한다. 영어 기준(3~4자/토큰)으로 잡으면 한국어 문서의 뒤가 잘려 나간다.
 
+### 제목이 쓰는 몫
+
+위 표의 값은 **임베딩에 들어가는 문자열 전체**의 한계다. 그런데 실제로 보내는 것은 청크만이
+아니라 `f"{제목}\n{청크}"` 라서(아래 [임베딩](#임베딩) 참고), 청크를 표의 값까지 꽉 채워 자르면
+제목과 개행만큼 한계를 넘는다. 위에서 본 대로 넘친 뒷부분은 오류 없이 버려진다.
+
 ```
-        0              2252              4504
+services.indexing.split_embedding_budget
+
+청크 문자 수 = max_chars - len(제목) - 1
+제목         = 앞에서 max_chars × 0.25 까지만 (그보다 길면 잘라서 임베딩)
+```
+
+`max_chars` 자체가 최악의 문자/토큰 비율로 환산된 값이라 여유가 거의 없다 —
+`gemini-embedding-001`의 2252자는 1.11자/토큰인 문서에서 이미 2029토큰으로 한계 2048에
+닿는다. 제목 몫을 빼두지 않으면 한국어 밀도가 높은 문서에서 청크 끝이 제목 길이만큼 잘렸다.
+
+제목 몫에 상한(25%)을 두는 것은 제목이 비정상적으로 긴 문서에서 본문에 남는 자리가 거의 없어
+청크가 잘게 쪼개지는 것을 막기 위한 것이다.
+
+```
+        0          청크 문자 수        ×2
 full_text ├──────────────┼──────────────┼──────┤
           │  청크 0      │  청크 1      │ 청크2 │
           └─ char_start/char_end 로 위치만 기록
@@ -269,12 +315,15 @@ full_text ├──────────────┼───────�
 ### 임베딩
 
 ```python
-embed_texts([f"{document.title}\n{chunk.text}" for chunk in chunks])
+title, chunk_chars = split_embedding_budget(document.title, max_chars)
+chunks = chunk_text(document.full_text, max_chars=chunk_chars)
+embed_texts([f"{title}\n{chunk.text}" for chunk in chunks])
 ```
 
 - 한 문서의 모든 청크를 **한 번의 API 호출**로 임베딩한다. 청크가 많은 문서일수록 이득이 크다.
 - 각 청크 앞에 **문서 제목을 붙여서** 임베딩한다. 본문 중간 청크만 떼어놓으면 무슨 글의
-  일부인지 알 수 없어, 제목이 그 맥락을 준다.
+  일부인지 알 수 없어, 제목이 그 맥락을 준다. 제목이 차지하는 자리는 청킹 단계에서 미리
+  빼둔다([제목이 쓰는 몫](#제목이-쓰는-몫)).
 - 임베딩을 어디서 받는지는 설정이 정한다(설정 화면의 '제공자', 기본은 Gemini).
   - **Gemini** — 모델 `EMBEDDING_MODEL`(기본 `gemini-embedding-001`), 차원 `EMBEDDING_DIM`(기본
     `3072`), `task_type="RETRIEVAL_DOCUMENT"`. 검색 질의 쪽은 `RETRIEVAL_QUERY`로 다르게 임베딩한다.
@@ -284,7 +333,10 @@ embed_texts([f"{document.title}\n{chunk.text}" for chunk in chunks])
 - 제공자나 모델을 바꾸면 이미 쌓인 벡터는 다른 공간의 좌표가 되어 쓸 수 없다. `POST /reindex`로
   색인을 비우고 다시 쌓아야 하며, 그 전까지 검색은 벡터 쪽을 건너뛴다. 자세한 내용은
   [README의 임베딩 제공자](../README.md#6-임베딩-제공자-gemini-또는-tei)를 참고한다.
-- 전문 색인(`chunk_fts`)에는 제목을 붙이지 않은 청크 본문만 넣는다.
+- 전문 색인(`chunk_fts`)에는 제목을 **별도 열로** 넣는다. 한 열에 합치면 제목과 본문을 구별해
+  가중치를 줄 수 없고, 제목이 그 문서의 모든 청크 행에 반복 색인되어 제목 단어의 IDF가
+  희석된다. 이쪽 제목은 자르지 않는다 — 길이를 줄이는 것은 임베딩 입력 한계 때문이고 FTS에는
+  그런 한계가 없다.
 
 ### 세 테이블에 나눠 쓰기
 
@@ -299,12 +351,12 @@ embed_texts([f"{document.title}\n{chunk.text}" for chunk in chunks])
   (일반 테이블)            (vec0 가상)               (FTS5 가상)
 
   document_id  = D        document_id = D          vector_key = "D:1"
-  seq          = 1        seq         = 1          body       = 청크 본문
-  char_start   = 8192     embedding   = float32[3072]
+  seq          = 1        seq         = 1          title      = 문서 제목
+  char_start   = 8192     embedding   = float32[3072]  body   = 청크 본문
   char_end     = 16384
 
   → 원문 위치만            → 벡터 검색용             → 전문 검색용
-    본문 사본 없음           cosine 거리               본문 사본 있음
+    본문 사본 없음           cosine 거리               제목 + 본문 사본
 ```
 
 `chunks`가 본문을 복사해 두지 않고 `char_start`/`char_end`로 `documents.full_text`를 가리키는
@@ -322,9 +374,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     vector_key UNINDEXED,
+    title,
     body
 );
 ```
+
+가상 테이블에는 열을 더하는 `ALTER`가 없다. 그래서 `chunk_fts`의 열이 위 DDL과 다르면
+`init_db._ensure_chunk_fts_columns`가 테이블을 지우고 다시 만든다. 본문의 사본이라 버려도
+잃는 것은 없지만 **다시 채우는 것은 재색인**(`POST /reindex` → `POST /batch`)이다 —
+이미 `checked = true`인 문서는 배치가 건너뛴다. 그때까지 전문 검색은 빈 테이블을 보고
+벡터 검색만 결과를 낸다.
 
 `document_id`를 파티션 키로 두면 벡터 검색이 문서 단위로 쪼개져 탐색된다. `vector_key`는
 `"{document_id}:{seq}"` 형태의 문자열로, FTS 결과를 다시 청크로 되돌리는 유일한 연결고리다.
@@ -357,7 +416,7 @@ erDiagram
         string url
         string title
         text full_text "본문 원본 — 청크가 가리키는 대상"
-        string hash UK "sha256(url + content)"
+        string hash UK "sha256(url)"
         datetime timestamp "본문 추출 시각"
         bool checked "색인 완료 여부"
     }
@@ -374,6 +433,7 @@ erDiagram
     }
     chunk_fts {
         string vector_key "document_id:seq"
+        string title "문서 제목 (자르지 않음)"
         string body "청크 본문 사본"
     }
 ```
@@ -397,7 +457,7 @@ erDiagram
 | 본문 추출 | SPA 렌더링이 800ms보다 늦음 | 이전 화면 본문이 실릴 수 있음 |
 | 전송 | 서버 다운 · 오프라인 | 재시도 큐에 남아 30초마다 재시도 |
 | 전송 | 재시도 큐가 300건 초과 | 오래된 건부터 버림 |
-| 저장 | 같은 URL + 같은 본문 | 무시(중복) |
+| 저장 | 이미 있는 URL | 무시(중복) — 본문이 달라져도 갱신되지 않음 |
 | 색인 | `/batch`를 돌리지 않음 | 검색되지 않음 |
 | 색인 | 본문이 비어 있음 | 청크 0개, 검색되지 않음 |
 | 색인 | 임베딩 실패 | 롤백 후 다음 배치에서 재시도 |
