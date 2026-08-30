@@ -14,8 +14,10 @@ from backend.models.conversation import (
 from backend.schemas.conversation import (
     ConversationDetail,
     ConversationMessage,
+    ConversationResult,
     ConversationSummary,
 )
+from backend.services.results import load_shown_documents
 
 
 def ensure_conversation(conversation_id: str | None, db: Session) -> str:
@@ -162,17 +164,33 @@ def load_conversation_detail(conversation_id: str, db: Session) -> ConversationD
     """대화 한 건의 전문을 반환한다. 모르는 id면 None.
 
     load_recent_messages와 달리 잘라내지 않는다. 대화를 화면에 되살리는 용도라 전부 필요하다.
+
+    content에는 답변 문장만 남아 그것만으로는 결과 카드를 다시 그릴 수 없다. 그 턴이 보여준
+    document_id는 남아 있으므로 문서를 조인해 제목과 URL을 되살린다(services/results.py).
     """
     conversation = load_conversation(conversation_id, db)
     if conversation is None:
         return None
 
+    messages = load_all_messages(conversation_id, db)
+    shown = load_shown_documents(messages, db)
+
     return ConversationDetail(
         conversation_id=conversation.conversation_id,
         created_at=conversation.created_at,
         messages=[
-            ConversationMessage(role=message.role, content=message.content, created_at=message.created_at)
-            for message in load_all_messages(conversation_id, db)
+            ConversationMessage(
+                role=message.role,
+                content=message.content,
+                created_at=message.created_at,
+                results=[
+                    ConversationResult(
+                        document_id=document.document_id, title=document.title, url=document.url
+                    )
+                    for document in shown.get(message.id, ())
+                ],
+            )
+            for message in messages
         ],
     )
 

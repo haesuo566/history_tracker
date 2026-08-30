@@ -1,18 +1,20 @@
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 
 from loguru import logger
 from sqlalchemy.orm import Session
 
-from backend.models.conversation import MessageRole
+from backend.models.conversation import Message, MessageRole
 from backend.models.document import Document
 from backend.services.conversation import (
     append_message,
     ensure_conversation,
     load_recent_messages,
 )
-from backend.services.detail import load_candidates, resolve_target
+from backend.services.detail import resolve_target
 from backend.services.intent import Intent, classify_by_regex
 from backend.services.query_parser import rewrite_query
+from backend.services.results import latest_shown, load_shown_documents, past_shown
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,11 @@ class PreprocessedMessage:
     intent가 ETC면 query는 쓰이지 않는다(원문이 그대로 들어 있다). DETAIL이면 target_document가
     반드시 채워져 있다 — 지목한 문서를 특정하지 못한 턴은 RECALL로 내려보내므로, 이후 단계는
     'DETAIL인데 대상이 없는' 경우를 다룰 필요가 없다.
+
+    history는 이번 입력 직전까지의 대화이고, shown은 그 안의 각 턴이 보여준 결과 목록이다
+    (메시지 id -> 문서, services/results.py). 답변 생성이 같은 맥락을 다시 조회하지 않도록 여기
+    실어 보낸다. shown에는 직전 턴도 그대로 들어 있다 — 재작성 호출에서만 그 턴을 빼고 넘긴다
+    (후보 목록으로 이미 따로 실리기 때문이다).
     """
 
     conversation_id: str
@@ -29,6 +36,8 @@ class PreprocessedMessage:
     query: str
     desired_count: int | None = None
     target_document: Document | None = None
+    history: Sequence[Message] = ()
+    shown: Mapping[int, Sequence[Document]] = field(default_factory=dict)
 
 
 def _settle_intent(by_regex: Intent | None, by_rewrite: Intent, has_candidates: bool) -> Intent:
@@ -58,16 +67,23 @@ def preprocess_message(message: str, conversation_id: str | None, db: Session) -
     conversation_id = ensure_conversation(conversation_id, db)
     # 이번 입력을 저장하기 전에 읽어야 history가 "직전까지의 대화"가 된다.
     history = load_recent_messages(conversation_id, db)
+    shown = load_shown_documents(history, db)
     append_message(conversation_id, MessageRole.USER, message, db)
 
     by_regex = classify_by_regex(message)
     if by_regex is Intent.ETC:
         # 잡담은 검색을 타지 않으니 재작성할 것이 없다. 여기서 끊어 Gemini 호출을 아낀다.
         logger.debug("intent classified by regex: {!r} -> {} (skipping query rewrite)", message, by_regex)
-        return PreprocessedMessage(conversation_id=conversation_id, intent=by_regex, query=message)
+        return PreprocessedMessage(
+            conversation_id=conversation_id,
+            intent=by_regex,
+            query=message,
+            history=history,
+            shown=shown,
+        )
 
-    candidates = load_candidates(history, db)
-    parsed = rewrite_query(message, history, candidates)
+    candidates = latest_shown(shown)
+    parsed = rewrite_query(message, history, candidates, past_shown(shown))
     intent = _settle_intent(by_regex, parsed.intent, bool(candidates))
 
     target_document = None
@@ -94,4 +110,6 @@ def preprocess_message(message: str, conversation_id: str | None, db: Session) -
         query=parsed.query,
         desired_count=parsed.desired_count,
         target_document=target_document,
+        history=history,
+        shown=shown,
     )

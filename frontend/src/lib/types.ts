@@ -61,12 +61,13 @@ export interface ConversationListBody {
 
 /**
  * GET /api/conversations/{id} 응답 본문.
- * 백엔드는 과거 assistant 메시지의 검색 결과(title/url)를 저장하지 않고 답변 문장만 남기므로,
- * 다시 불러온 대화의 assistant 메시지에는 결과 카드 없이 텍스트만 있다.
+ * 백엔드가 저장하는 것은 답변 문장과 그 턴이 보여준 document_id 뿐이지만, 조회할 때 문서를 조인해
+ * 제목과 URL 을 되살려 주므로 다시 불러온 대화에도 결과 카드가 함께 온다.
+ * 결과가 없던 턴, 그리고 그 id 가 저장되기 전에 쌓인 옛 메시지는 results 가 빈 배열이다.
  */
 export interface ConversationDetailBody {
   conversation_id: string;
-  messages: { role: string; content: string }[];
+  messages: { role: string; content: string; results: SearchResult[] }[];
 }
 
 /** 설정 화면의 모델 선택지 한 줄. 임베딩 제공자 선택지도 같은 형태다. */

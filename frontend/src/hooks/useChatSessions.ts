@@ -9,6 +9,7 @@ import type {
   ConversationDetailBody,
   ConversationListBody,
   ErrorBody,
+  SearchResult,
 } from "@/lib/types";
 
 export type ChatStatus = "idle" | "loading";
@@ -48,13 +49,17 @@ function deriveTitle(text: string): string {
 
 /**
  * 백엔드에 저장된 과거 메시지를 화면 말풍선 형태로 바꾼다.
- * role 은 /api/conversations/{id} 단계(backend.ts)에서 이미 "user"/"assistant" 로만 걸러졌다.
+ * role 과 results 는 /api/conversations/{id} 단계(backend.ts)에서 이미 형태가 걸러졌다.
  */
-function toChatMessage(raw: { role: string; content: string }): ChatMessage {
+function toChatMessage(raw: { role: string; content: string; results: SearchResult[] }): ChatMessage {
   return raw.role === "user"
     ? { id: createId(), role: "user", content: raw.content }
-    // 과거 assistant 메시지는 답변 문장만 저장돼 있어 검색 결과 카드는 복원할 수 없다.
-    : { id: createId(), role: "assistant", results: [], answer: raw.content.length > 0 ? raw.content : null };
+    : {
+        id: createId(),
+        role: "assistant",
+        results: raw.results,
+        answer: raw.content.length > 0 ? raw.content : null,
+      };
 }
 
 export function useChatSessions() {

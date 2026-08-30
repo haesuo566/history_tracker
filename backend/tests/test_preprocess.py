@@ -13,6 +13,7 @@ from backend.services.query_parser import ParsedQuery
 
 KIMCHI = ("doc-kimchi", "김치찌개 레시피", "https://blog.example.com/kimchi-jjigae")
 DOENJANG = ("doc-doenjang", "된장찌개 끓이는 법", "https://recipe.example.com/doenjang")
+BUDAE = ("doc-budae", "부대찌개 맛집", "https://map.example.com/budae")
 
 
 @pytest.fixture
@@ -31,11 +32,15 @@ def stub_rewrite(
     """재작성을 대체해 원하는 판정을 돌려주게 하고, 호출마다 받은 입력을 담는 리스트를 준다."""
     calls: list[dict] = []
 
-    def fake_rewrite_query(message, history=(), candidates=()):
+    def fake_rewrite_query(message, history=(), candidates=(), shown=None):
         calls.append(
             {
                 "history": [(past.role, past.content) for past in history],
                 "candidates": [candidate.title for candidate in candidates],
+                "listed_turns": [
+                    [document.title for document in documents]
+                    for _, documents in sorted((shown or {}).items())
+                ],
             }
         )
         return ParsedQuery(
@@ -119,6 +124,23 @@ def test_candidates_are_the_last_shown_result_list(db, monkeypatch):
     preprocess_message("첫 번째 거 자세히", conversation_id, db)
 
     assert calls[0]["candidates"] == ["김치찌개 레시피", "된장찌개 끓이는 법"]
+
+
+def test_older_result_lists_reach_the_rewrite_too(db, monkeypatch):
+    """직전 턴만으로는 '아까 그거'가 두 턴 넘게 거슬러 가면 풀리지 않는다."""
+    calls = stub_rewrite(monkeypatch, Intent.RECALL)
+    conversation_id = seed_answered_turn(db)
+    add_document(db, *BUDAE)
+    append_message(conversation_id, MessageRole.USER, "찌개 말고 다른 거", db)
+    append_message(
+        conversation_id, MessageRole.ASSISTANT, "이건 어때요", db, result_document_ids=["doc-budae"]
+    )
+
+    preprocess_message("아까 처음에 보여준 그 김치찌개 글 다시", conversation_id, db)
+
+    # 직전 턴(부대찌개)은 후보 목록으로 따로 실리므로 여기서 빠진다.
+    assert calls[0]["candidates"] == ["부대찌개 맛집"]
+    assert calls[0]["listed_turns"] == [["김치찌개 레시피", "된장찌개 끓이는 법"]]
 
 
 def test_target_is_matched_by_title_when_no_index_is_given(db, monkeypatch):

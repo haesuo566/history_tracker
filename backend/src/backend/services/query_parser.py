@@ -1,14 +1,14 @@
-from collections.abc import Sequence
-from itertools import dropwhile
+from collections.abc import Mapping, Sequence
 
 from google.genai import types
 from loguru import logger
 from pydantic import BaseModel
 
-from backend.models.conversation import Message, MessageRole
+from backend.models.conversation import Message
 from backend.models.document import Document
 from backend.services.gemini import get_client
 from backend.services.intent import Intent
+from backend.services.prompt import format_listing, render_history
 from backend.services.runtime_settings import get_settings
 
 
@@ -52,60 +52,56 @@ SYSTEM_INSTRUCTION = (
     "그 숫자를 정수로, 그렇지 않으면 null을 담아라."
 )
 
-# Gemini의 contents는 assistant 발화를 "model" 역할로 받는다.
-_GEMINI_ROLE = {MessageRole.USER: "user", MessageRole.ASSISTANT: "model"}
-
 
 def _build_contents(
-    message: str, history: Sequence[Message], candidates: Sequence[Document] = ()
+    message: str,
+    history: Sequence[Message],
+    candidates: Sequence[Document] = (),
+    shown: Mapping[int, Sequence[Document]] = {},
 ) -> list[types.Content]:
-    """이전 메시지를 Gemini 멀티턴 contents로 옮기고 마지막에 이번 입력을 붙인다.
+    """앞선 대화를 옮기고(services/prompt.py) 후보 목록과 이번 입력을 뒤에 붙인다.
 
-    Gemini는 contents가 user 발화로 시작하길 기대한다. 정상 경로에서는 user/assistant가 짝을
-    이루지만 답변 생성이 실패해 user 메시지만 저장된 턴이 있으면 최근 N건을 자른 결과가
-    assistant부터 시작할 수 있어, 앞쪽 assistant 발화는 버린다.
-
-    후보 목록은 이번 입력 바로 앞에 번호를 붙여 끼운다. 이전 답변 문장에는 제목이 실리지 않은 턴도
-    있어, 무엇이 목록에 있었는지는 대화 내용만으로 되짚을 수 없다. 목록을 따로 보여줘야 판단과
-    번호 지목이 같은 것을 보고 이뤄진다. 별개의 발화로 두는 것은 '판단 대상은 마지막 사용자
-    메시지'라는 지시를 흐리지 않기 위해서다.
+    후보 목록은 이번 입력 바로 앞에 번호를 붙여 끼운다. 목록을 따로 보여줘야 판단과 번호 지목이
+    같은 것을 보고 이뤄진다. 별개의 발화로 두는 것은 '판단 대상은 마지막 사용자 메시지'라는 지시를
+    흐리지 않기 위해서다. 이 목록과 겹치는 직전 턴은 shown에서 미리 빠져 있다(results.past_shown).
     """
-    spoken = (past for past in history if past.content)
-    turns = dropwhile(lambda past: past.role != MessageRole.USER, spoken)
-    contents = [
-        types.Content(role=_GEMINI_ROLE.get(past.role, "user"), parts=[types.Part(text=past.content)])
-        for past in turns
-    ]
+    contents = render_history(history, shown)
     if candidates:
-        listing = "\n".join(
-            f"{index}. {candidate.title} ({candidate.url})" for index, candidate in enumerate(candidates, start=1)
-        )
         contents.append(
-            types.Content(role="user", parts=[types.Part(text=f"직전에 보여준 결과 목록:\n{listing}")])
+            types.Content(
+                role="user",
+                parts=[types.Part(text=f"직전에 보여준 결과 목록:\n{format_listing(candidates)}")],
+            )
         )
     contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
     return contents
 
 
 def rewrite_query(
-    message: str, history: Sequence[Message] = (), candidates: Sequence[Document] = ()
+    message: str,
+    history: Sequence[Message] = (),
+    candidates: Sequence[Document] = (),
+    shown: Mapping[int, Sequence[Document]] = {},
 ) -> ParsedQuery:
     """사용자 입력을 의도와 검색어, 메타데이터(원하는 결과 개수 등)로 한 번에 해석한다.
 
     history를 넘기면 그 대화를 맥락으로 삼아 '그거', '아까 그 사이트' 같은 지시 표현을 풀어낸다.
     candidates는 직전에 보여준 결과 목록으로, 지목된 항목의 번호를 target_index로 받는 근거가 된다.
+    shown은 그보다 앞선 턴들이 보여준 목록이라, '아까 두 번째로 찾아준 그거'처럼 직전 턴을 넘어
+    거슬러 가리키는 표현을 풀어낼 근거가 된다.
     """
     model = get_settings().query_rewrite_model
     logger.debug(
-        "rewriting query via {}: {!r} (history={} message(s), candidates={})",
+        "rewriting query via {}: {!r} (history={} message(s), candidates={}, listed turns={})",
         model,
         message,
         len(history),
         len(candidates),
+        len(shown),
     )
     response = get_client().models.generate_content(
         model=model,
-        contents=_build_contents(message, history, candidates),
+        contents=_build_contents(message, history, candidates, shown),
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",

@@ -193,6 +193,50 @@ def test_build_contents_without_history_sends_only_the_current_message():
     ]
 
 
+def test_build_contents_appends_what_each_past_turn_showed():
+    """답변 문장에는 URL이 남지 않는다. 그 턴이 보여준 목록을 발화 안에 붙여야 되짚을 수 있다."""
+    answer = Message(id=2, role=MessageRole.ASSISTANT, content="두 건 찾았어요")
+    history = [Message(id=1, role=MessageRole.USER, content="요리 블로그 찾아줘"), answer]
+    shown = {
+        2: [
+            Document(document_id="doc-1", url="https://a.example.com/kimchi", title="김치찌개 레시피"),
+            Document(document_id="doc-2", url="https://b.example.com/doenjang", title="된장찌개 끓이는 법"),
+        ]
+    }
+
+    contents = _build_contents("아까 그 두 번째 거 다시", history, (), shown)
+
+    assert [(content.role, content.parts[0].text) for content in contents] == [
+        ("user", "요리 블로그 찾아줘"),
+        (
+            "model",
+            (
+                "두 건 찾았어요\n\n"
+                "[이 턴에 보여준 목록]\n"
+                "1. 김치찌개 레시피 (https://a.example.com/kimchi)\n"
+                "2. 된장찌개 끓이는 법 (https://b.example.com/doenjang)"
+            ),
+        ),
+        ("user", "아까 그 두 번째 거 다시"),
+    ]
+
+
+def test_build_contents_leaves_turns_without_a_listing_untouched():
+    """결과가 없던 턴은 발화가 그대로여야 한다. 빈 목록 머리말만 붙으면 잡음이다."""
+    history = [
+        Message(id=1, role=MessageRole.USER, content="고마워"),
+        Message(id=2, role=MessageRole.ASSISTANT, content="천만에요"),
+    ]
+
+    contents = _build_contents("다음 질문", history, (), {3: []})
+
+    assert [(content.role, content.parts[0].text) for content in contents] == [
+        ("user", "고마워"),
+        ("model", "천만에요"),
+        ("user", "다음 질문"),
+    ]
+
+
 def test_build_contents_lists_candidates_just_before_the_current_message():
     """번호로 지목하려면 무엇이 몇 번인지 보여야 한다. 답변 문장만으로는 되짚을 수 없다."""
     candidates = [

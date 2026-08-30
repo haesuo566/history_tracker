@@ -9,7 +9,7 @@
 | 개념 | 설명 |
 | --- | --- |
 | `conversations` | 대화 세션. `conversation_id`(UUID), `created_at`, `title` |
-| `messages` | 대화에 오간 메시지 한 건. `role`(`user`/`assistant`), `content`, `created_at`. 순서는 `created_at`이 아니라 내부 `id`로 판단한다(초 단위라 같은 요청의 user/assistant가 같은 값을 가질 수 있어서) |
+| `messages` | 대화에 오간 메시지 한 건. `role`(`user`/`assistant`), `content`, `created_at`, 그리고 그 턴이 보여준 결과의 `result_document_ids`. 순서는 `created_at`이 아니라 내부 `id`로 판단한다(초 단위라 같은 요청의 user/assistant가 같은 값을 가질 수 있어서) |
 
 **`title`은 사용자가 정하는 값이 아니다.** 그 대화의 **첫 `user` 메시지**가 저장되는 시점에
 한 번만 자동으로 채워지고(`services/conversation.py`의 `append_message`), 이후 메시지가 더
@@ -110,18 +110,48 @@
     {
       "role": "user",
       "content": "어제 본 리액트 상태관리 글 찾아줘",
-      "created_at": "2026-08-04T14:01:53"
+      "created_at": "2026-08-04T14:01:53",
+      "results": []
     },
     {
       "role": "assistant",
-      "content": "이 글입니다: https://example.com/react-state",
-      "created_at": "2026-08-04T14:01:53"
+      "content": "이 글입니다",
+      "created_at": "2026-08-04T14:01:53",
+      "results": [
+        {
+          "document_id": "9f2c1b40-...",
+          "title": "리액트 상태관리 비교",
+          "url": "https://example.com/react-state"
+        }
+      ]
     }
   ]
 }
 ```
 
 메시지가 없으면 `"messages": []`. 오래된 것부터 시간순.
+
+### `results`
+
+그 턴이 사용자에게 보여준 결과 목록을 **보여준 순서 그대로** 되살린 값이다. `content`에는 답변
+문장만 남으므로 이것이 없으면 화면에 결과 카드를 다시 그릴 수 없다.
+
+제목과 URL은 저장돼 있지 않다. `messages.result_document_ids`에 남은 `document_id`로 `documents`를
+조인해 매번 만든다(`services/results.py`의 `load_shown_documents`). 문서는 한 번 저장되면 제목도
+URL도 바뀌지 않으므로(`services/document.py`의 `on_conflict_do_nothing`) 지금 조인해도 그때 보여준
+값과 같다 — 그래서 메시지에 복제해 두지 않는다.
+
+검색 당시의 점수와 발췌는 담기지 않는다. 저장되지 않았고 재현할 수도 없어서, 0.0이나 빈 문자열로
+채우면 받는 쪽이 그것을 실제 값으로 읽게 된다.
+
+빈 배열이 되는 경우는 셋이다.
+
+- 결과 없이 답만 한 턴, 그리고 모든 `user` 메시지
+- detail 턴 — 이미 보여준 목록에서 하나를 설명한 턴이라 목록을 갱신하지 않는다(`api/routes/chat.py`)
+- `result_document_ids` 컬럼이 생기기 전에 쌓인 메시지
+
+가리키던 문서가 사라졌으면 그 항목만 조용히 빠진다. URL 단위 중복 판정으로 넘어오며 지운 문서가
+있어(`db/init_db.py`) 옛 메시지에 그런 id가 남아 있을 수 있다.
 
 **모르는 `conversation_id`면 `404`**
 

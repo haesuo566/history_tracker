@@ -38,9 +38,13 @@ def chat(monkeypatch):
     )
     seen: dict = {}
 
-    def fake_rewrite_query(message, history=(), candidates=()):
+    def fake_rewrite_query(message, history=(), candidates=(), shown=None):
         seen["history"] = [(past.role, past.content) for past in history]
         seen["candidates"] = [candidate.document_id for candidate in candidates]
+        seen["listed_turns"] = [
+            [document.document_id for document in documents]
+            for _, documents in sorted((shown or {}).items())
+        ]
         # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
         # 의도를 정한다 — 의도 판정 규칙 자체는 test_preprocess.py가 본다.
         intent = Intent.ETC if "잡담" in message else Intent.DETAIL if "상세" in message else Intent.RECALL
@@ -71,14 +75,31 @@ def chat(monkeypatch):
             ),
         ]
 
-    def fake_generate_detail_answer(message, document):
+    def record_answer_context(history, shown) -> None:
+        """답변 생성이 받은 맥락. 재작성이 받은 것과 같아야 한다."""
+        seen["answer_history"] = [(past.role, past.content) for past in history]
+        seen["answer_listed_turns"] = [
+            [document.document_id for document in documents]
+            for _, documents in sorted((shown or {}).items())
+        ]
+
+    def fake_generate_detail_answer(message, document, history=(), shown=None):
         seen["detail_body"] = document.full_text
+        record_answer_context(history, shown)
         return f"{message}에 대한 상세 답변"
+
+    def fake_generate_recall_answer(message, results, history=(), shown=None):
+        record_answer_context(history, shown)
+        return f"{message}에 대한 답변"
+
+    def fake_generate_answer(message, history=(), shown=None):
+        record_answer_context(history, shown)
+        return f"{message}에 대한 잡담 답변"
 
     monkeypatch.setattr(preprocess_service, "rewrite_query", fake_rewrite_query)
     monkeypatch.setattr(chat_route, "search_history", fake_search_history)
-    monkeypatch.setattr(chat_route, "generate_recall_answer", lambda message, results: f"{message}에 대한 답변")
-    monkeypatch.setattr(chat_route, "generate_answer", lambda message: f"{message}에 대한 잡담 답변")
+    monkeypatch.setattr(chat_route, "generate_recall_answer", fake_generate_recall_answer)
+    monkeypatch.setattr(chat_route, "generate_answer", fake_generate_answer)
     monkeypatch.setattr(chat_route, "generate_detail_answer", fake_generate_detail_answer)
 
     app = FastAPI()
@@ -158,6 +179,33 @@ def test_second_request_reuses_the_id_and_receives_the_previous_turn(chat):
 
     assert body["conversation_id"] == conversation_id
     assert seen["history"] == [
+        ("user", "요리 블로그 찾아줘"),
+        ("assistant", "요리 블로그 찾아줘에 대한 답변"),
+    ]
+
+
+def test_answer_receives_the_same_context_as_the_rewrite(chat):
+    """재작성만 맥락을 보면 '아까 그거'를 검색어로는 풀어도 답변 문장에서는 못 알아듣는다."""
+    client, _db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    post(client, "그거 다시", conversation_id)
+
+    assert seen["answer_history"] == seen["history"]
+    # 답변은 직전 턴의 목록까지 받는다. 재작성은 같은 목록을 후보 목록으로 따로 받으므로 여기서 빠진다.
+    assert seen["answer_listed_turns"] == [[DOCUMENT_ID, OTHER_DOCUMENT_ID]]
+    assert seen["listed_turns"] == []
+    assert seen["candidates"] == [DOCUMENT_ID, OTHER_DOCUMENT_ID]
+
+
+def test_chitchat_answer_still_sees_the_conversation(chat):
+    """잡담은 검색을 타지 않을 뿐, 앞선 대화까지 잊어야 할 이유는 없다."""
+    client, _db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    post(client, "고마워 잡담", conversation_id)
+
+    assert seen["answer_history"] == [
         ("user", "요리 블로그 찾아줘"),
         ("assistant", "요리 블로그 찾아줘에 대한 답변"),
     ]

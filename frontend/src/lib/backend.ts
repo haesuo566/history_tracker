@@ -124,6 +124,15 @@ function toSearchResult(raw: Record<string, unknown>): SearchResult | null {
   return { title: title.length > 0 ? title : url, url };
 }
 
+/** 결과 목록 통째로. 배열이 아니거나 형태가 어긋난 항목은 버려서 빈 목록으로 수렴한다. */
+function toSearchResults(value: unknown): SearchResult[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map(toSearchResult)
+    .filter((result): result is SearchResult => result !== null);
+}
+
 export interface ChatReply {
   conversationId: string;
   results: SearchResult[];
@@ -157,12 +166,7 @@ export async function searchHistory(
     throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
   }
 
-  const results = Array.isArray(rawResults)
-    ? rawResults
-        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-        .map(toSearchResult)
-        .filter((result): result is SearchResult => result !== null)
-    : [];
+  const results = toSearchResults(rawResults);
 
   const answer = typeof rawAnswer === "string" && rawAnswer.length > 0 ? rawAnswer : null;
 
@@ -225,19 +229,20 @@ export async function listConversations(signal?: AbortSignal): Promise<Conversat
 export interface ConversationMessageItem {
   role: "user" | "assistant";
   content: string;
+  results: SearchResult[];
 }
 
 function toConversationMessage(raw: Record<string, unknown>): ConversationMessageItem | null {
-  const { role, content } = raw;
+  const { role, content, results } = raw;
   if (role !== "user" && role !== "assistant") return null;
   if (typeof content !== "string") return null;
-  return { role, content };
+  return { role, content, results: toSearchResults(results) };
 }
 
 /**
  * GET /conversations/{id} 로 대화 전문을 받는다. 모르는 id 면 null.
- * 과거 assistant 메시지는 Gemini 가 생성한 답변 문장만 저장돼 있고 검색 결과(title/url)는
- * DB에 남지 않으므로, 다시 불러온 assistant 메시지에는 결과 카드가 없다.
+ * 저장돼 있는 것은 답변 문장과 그 턴이 보여준 document_id 지만, 백엔드가 조회할 때 문서를 조인해
+ * 제목·URL 을 채워 주므로 결과 카드도 함께 온다. 결과가 없던 턴은 빈 배열이다.
  */
 export async function getConversation(
   conversationId: string,

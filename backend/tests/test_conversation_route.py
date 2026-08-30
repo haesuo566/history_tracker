@@ -11,6 +11,7 @@ from backend.api.routes import conversation as conversation_route
 from backend.db.base import Base
 from backend.db.session import get_db
 from backend.models.conversation import Conversation, Message, MessageRole
+from backend.models.document import Document
 from backend.services.conversation import (
     TITLE_MAX_CHARS,
     append_message,
@@ -25,7 +26,9 @@ def api():
     인메모리 DB를 TestClient 스레드와 공유하려면 check_same_thread=False 와 StaticPool 이 필요하다.
     """
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(bind=engine, tables=[Conversation.__table__, Message.__table__])
+    Base.metadata.create_all(
+        bind=engine, tables=[Conversation.__table__, Message.__table__, Document.__table__]
+    )
 
     app = FastAPI()
     app.include_router(conversation_route.router)
@@ -173,6 +176,48 @@ def test_detail_returns_every_message_in_order(api):
         ("user", "그거 다시"),
         ("assistant", "같은 글입니다"),
     ]
+
+
+def test_detail_restores_the_result_cards_of_each_turn(api):
+    """content 에는 답변 문장만 남는다. 카드는 남은 document_id 로 문서를 되살려 만든다."""
+    client, db = api
+    db.add(
+        Document(
+            document_id="doc-kimchi",
+            url="https://blog.example.com/kimchi",
+            title="김치찌개 레시피",
+            full_text="본문",
+            hash="hash-kimchi",
+        )
+    )
+    db.commit()
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "요리 블로그 찾아줘", db)
+    append_message(
+        conversation_id, MessageRole.ASSISTANT, "이 글입니다", db, result_document_ids=["doc-kimchi"]
+    )
+
+    body = client.get(f"/conversations/{conversation_id}").json()
+
+    assert body["messages"][0]["results"] == []
+    assert body["messages"][1]["results"] == [
+        {
+            "document_id": "doc-kimchi",
+            "title": "김치찌개 레시피",
+            "url": "https://blog.example.com/kimchi",
+        }
+    ]
+
+
+def test_detail_of_a_turn_without_results_has_no_cards(api):
+    """결과 없이 답만 한 턴, 그리고 result_document_ids 가 생기기 전에 쌓인 메시지."""
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+    turn(conversation_id, "고마워", "천만에요", db)
+
+    body = client.get(f"/conversations/{conversation_id}").json()
+
+    assert [message["results"] for message in body["messages"]] == [[], []]
 
 
 def test_detail_of_an_empty_conversation_has_no_messages(api):

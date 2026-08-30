@@ -14,10 +14,7 @@ from collections.abc import Sequence
 from difflib import SequenceMatcher
 
 from loguru import logger
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
-from backend.models.conversation import Message, MessageRole
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
 from backend.services.tokenizer import extract_nouns
@@ -30,23 +27,6 @@ SNIPPET_CHARS = 300
 
 _NON_WORD = re.compile(r"[^0-9a-z가-힣]+")
 _ASCII_WORD = re.compile(r"[a-z0-9]+")
-
-
-def load_candidates(history: Sequence[Message], db: Session) -> list[Document]:
-    """직전 대화에서 마지막으로 보여준 결과 목록을 문서로 되살린다. 보여준 순서를 지킨다.
-
-    history 안에서만 찾는 것은 재작성 호출이 맥락으로 보는 범위와 후보 목록을 일치시키기 위해서다.
-    한참 전 턴의 목록을 후보로 세우면 사용자 화면에 없는 것을 '두 번째 것'으로 집게 된다.
-    """
-    document_ids = _latest_result_document_ids(history)
-    if not document_ids:
-        return []
-
-    documents = {
-        document.document_id: document
-        for document in db.scalars(select(Document).where(Document.document_id.in_(document_ids)))
-    }
-    return [documents[document_id] for document_id in document_ids if document_id in documents]
 
 
 def resolve_target(query: str, target_index: int | None, candidates: Sequence[Document]) -> Document | None:
@@ -75,13 +55,6 @@ def as_chat_result(document: Document) -> ChatResult:
         score=1.0,
         snippet=document.full_text[:SNIPPET_CHARS],
     )
-
-
-def _latest_result_document_ids(history: Sequence[Message]) -> list[str]:
-    for past in reversed(history):
-        if past.role == MessageRole.ASSISTANT and past.result_document_ids:
-            return list(past.result_document_ids)
-    return []
 
 
 def _best_match(query: str, candidates: Sequence[Document]) -> Document | None:
