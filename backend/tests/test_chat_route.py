@@ -14,9 +14,13 @@ from backend.schemas.chat import ChatResult
 from backend.services import preprocess as preprocess_service
 from backend.services.intent import Intent
 from backend.services.query_parser import ParsedQuery
+from backend.services.timerange import TimeRange, TimeRangeKind
 
 DOCUMENT_ID = "doc-kimchi"
 OTHER_DOCUMENT_ID = "doc-doenjang"
+
+# 오프셋이 붙은 시각이라야 하루 경계를 사용자의 자정으로 잡을 수 있다(lib/clock.ts 가 만드는 값).
+CLIENT_NOW = "2026-08-31T12:00:00+09:00"
 
 # detail 답변이 카드용 발췌(as_chat_result 의 앞 300자)가 아니라 본문을 근거로 받는지 가리려면
 # 본문이 그보다 길어야 한다.
@@ -46,19 +50,22 @@ def chat(monkeypatch):
             [document.document_id for document in documents]
             for _, documents in sorted((shown or {}).items())
         ]
-        # 실제 재작성도 의도·검색어·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
+        # 실제 재작성도 의도·검색어·기간·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
         # 의도를 정한다 — 의도 판정 규칙 자체는 test_preprocess.py가 본다.
         intent = Intent.ETC if "잡담" in message else Intent.DETAIL if "상세" in message else Intent.RECALL
         return ParsedQuery(
             intent=intent,
             target_index=1 if intent is Intent.DETAIL else None,
-            query=f"{message}(재작성)",
+            time_range=TimeRange(kind=TimeRangeKind.YESTERDAY) if "어제" in message else TimeRange(),
+            # 시간 표현을 빼면 검색어가 비는 질의는 재작성이 빈 문자열을 돌려준다.
+            query="" if "다 보여줘" in message else f"{message}(재작성)",
             desired_count=3 if "3개" in message else None,
         )
 
-    def fake_search_history(query, db, count=None):
+    def fake_search_history(query, db, count=None, window=None):
         seen["query"] = query
         seen["count"] = count
+        seen["window"] = window.label if window else None
         return [
             ChatResult(
                 document_id=DOCUMENT_ID,
@@ -74,6 +81,19 @@ def chat(monkeypatch):
                 score=0.7,
                 snippet="된장을 풀고",
             ),
+        ]
+
+    def fake_list_recent(window, db, count=None):
+        seen["listed_period"] = window.label
+        seen["count"] = count
+        return [
+            ChatResult(
+                document_id=DOCUMENT_ID,
+                url="https://blog.example.com/kimchi-jjigae",
+                title="김치찌개 레시피",
+                score=0.0,
+                snippet="돼지고기와 신김치를",
+            )
         ]
 
     def record_answer_context(history, shown) -> None:
@@ -99,6 +119,7 @@ def chat(monkeypatch):
 
     monkeypatch.setattr(preprocess_service, "rewrite_query", fake_rewrite_query)
     monkeypatch.setattr(chat_route, "search_history", fake_search_history)
+    monkeypatch.setattr(chat_route, "list_recent", fake_list_recent)
     monkeypatch.setattr(chat_route, "generate_recall_answer", fake_generate_recall_answer)
     monkeypatch.setattr(chat_route, "generate_answer", fake_generate_answer)
     monkeypatch.setattr(chat_route, "generate_detail_answer", fake_generate_detail_answer)
@@ -131,8 +152,16 @@ def chat(monkeypatch):
             yield client, db, seen
 
 
-def post(client: TestClient, message: str, conversation_id: str | None = None) -> dict:
-    response = client.post("/chat", json={"message": message, "conversation_id": conversation_id})
+def post(
+    client: TestClient,
+    message: str,
+    conversation_id: str | None = None,
+    client_now: str | None = CLIENT_NOW,
+) -> dict:
+    response = client.post(
+        "/chat",
+        json={"message": message, "conversation_id": conversation_id, "client_now": client_now},
+    )
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -239,6 +268,55 @@ def test_requested_result_count_reaches_search(chat):
     post(client, "요리 블로그 3개만 찾아줘")
 
     assert seen["count"] == 3
+
+
+def test_a_stated_period_reaches_the_search(chat):
+    """기간이 검색까지 닿지 않으면 재작성이 알아낸 것이 그 자리에서 버려진다."""
+    client, _db, seen = chat
+
+    post(client, "어제 본 요리 블로그 찾아줘")
+
+    assert seen["window"] == "어제(8월 30일)"
+
+
+def test_a_period_only_query_is_listed_instead_of_searched(chat):
+    """'어제 본 거 다 보여줘'에는 찾을 낱말이 없다. 검색을 태우면 아무 문서나 끌어온다."""
+    client, _db, seen = chat
+
+    body = post(client, "어제 본 거 다 보여줘")
+
+    assert "query" not in seen  # 검색은 타지 않았다
+    assert seen["listed_period"] == "어제(8월 30일)"
+    assert [result["document_id"] for result in body["results"]] == [DOCUMENT_ID]
+
+
+def test_a_bare_query_without_a_period_still_searches(chat):
+    """검색어가 비어도 기간이 없으면 늘어놓을 근거가 없다. 검색 쪽으로 간다."""
+    client, _db, seen = chat
+
+    post(client, "다 보여줘")
+
+    assert "listed_period" not in seen
+    assert seen["query"] == ""
+
+
+def test_the_clients_clock_reaches_the_rewrite(chat):
+    """서버는 브라우저의 시간대를 모른다. 요청에 실려 온 시각이 그대로 닿아야 한다."""
+    client, _db, seen = chat
+
+    post(client, "어제 본 요리 블로그 찾아줘")
+
+    assert seen["client_now"].isoformat() == "2026-08-31T12:00:00+09:00"
+
+
+def test_a_request_without_a_clock_still_works(chat):
+    """옛 클라이언트가 보낸 요청도 기간 없는 질의는 그대로 동작해야 한다."""
+    client, _db, seen = chat
+
+    post(client, "요리 블로그 찾아줘", client_now=None)
+
+    assert seen["client_now"] is None
+    assert seen["query"] == "요리 블로그 찾아줘(재작성)"
 
 
 def test_answer_is_generated_from_the_original_message(chat):

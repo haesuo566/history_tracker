@@ -9,7 +9,7 @@ from backend.services.conversation import append_message
 from backend.services.detail import as_chat_result
 from backend.services.intent import Intent
 from backend.services.preprocess import preprocess_message
-from backend.services.search import search_history
+from backend.services.search import list_recent, search_history
 
 router = APIRouter(tags=["chat"])
 
@@ -22,7 +22,14 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     # 앞선 대화와 그 턴들이 보여준 목록을 함께 넘겨, '아까 그거'가 무엇인지 답변 단계도 알게 한다.
     context = (prepared.history, prepared.shown)
     if prepared.intent == Intent.RECALL:
-        results = search_history(prepared.query, db, count=prepared.desired_count)
+        # "어제 본 거 다 보여줘"에는 찾을 낱말이 없다. 그대로 검색을 태우면 명사가 없어 전문
+        # 검색은 빈손이고 벡터 검색은 아무 문서나 끌어오므로, 기간만으로 늘어놓는다.
+        if prepared.window is not None and not prepared.query.strip():
+            results = list_recent(prepared.window, db, count=prepared.desired_count)
+        else:
+            results = search_history(
+                prepared.query, db, count=prepared.desired_count, window=prepared.window
+            )
         answer = generate_recall_answer(request.message, results, *context)
     elif prepared.intent == Intent.DETAIL:
         # 지목된 문서 한 건만 근거로 삼는다. 검색을 다시 태우면 특정해 둔 그 문서가 아닌 것이 위로
