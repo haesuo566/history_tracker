@@ -104,12 +104,14 @@ def chat(monkeypatch):
             for _, documents in sorted((shown or {}).items())
         ]
 
-    def fake_generate_detail_answer(message, document, history=(), shown=None):
+    def fake_generate_detail_answer(message, document, history=(), shown=None, client_now=None):
         seen["detail_body"] = document.full_text
         record_answer_context(history, shown)
         return f"{message}에 대한 상세 답변"
 
-    def fake_generate_recall_answer(message, results, history=(), shown=None):
+    def fake_generate_recall_answer(message, results, history=(), shown=None, window=None, client_now=None):
+        seen["answer_period"] = window.label if window else None
+        seen["answer_visited"] = [result.visited_at for result in results]
         record_answer_context(history, shown)
         return f"{message}에 대한 답변"
 
@@ -277,6 +279,15 @@ def test_a_stated_period_reaches_the_search(chat):
     post(client, "어제 본 요리 블로그 찾아줘")
 
     assert seen["window"] == "어제(8월 30일)"
+
+
+def test_the_answer_is_told_which_period_was_searched(chat):
+    """0건일 때 기간을 빼고 '기록이 없다'고만 하면 사용자는 아예 없는 줄로 안다."""
+    client, _db, seen = chat
+
+    post(client, "어제 본 요리 블로그 찾아줘")
+
+    assert seen["answer_period"] == "어제(8월 30일)"
 
 
 def test_a_period_only_query_is_listed_instead_of_searched(chat):

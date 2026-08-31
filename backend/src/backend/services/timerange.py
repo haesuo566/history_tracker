@@ -93,6 +93,16 @@ def local_now(client_now: datetime | None) -> datetime:
     return client_now if client_now.tzinfo is not None else client_now.replace(tzinfo=UTC)
 
 
+def to_local(moment: datetime, client_now: datetime | None) -> datetime:
+    """UTC로 저장된 시각을 사용자 지역의 시각으로 옮긴다.
+
+    검색 결과에 "8월 30일에 본 글"이라고 적으려면 필요하다. UTC 그대로 적으면 한국에서는 아침
+    아홉 시 이전에 본 것이 전날로 표기된다.
+    """
+    aware = moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+    return aware.astimezone(local_now(client_now).tzinfo)
+
+
 def _midnight(day: date, zone: tzinfo) -> datetime:
     """그 지역 그 날짜의 자정을 naive UTC로 옮긴다."""
     return datetime.combine(day, time.min, tzinfo=zone).astimezone(UTC).replace(tzinfo=None)

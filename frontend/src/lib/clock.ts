@@ -8,6 +8,36 @@
  *
  * 서버(라우트 핸들러)에서 부르면 서버가 선 지역의 시각이 되므로 브라우저에서만 부른다.
  */
+/** 그날 0시. 날짜 차이를 시분초에 흔들리지 않게 세려고 쓴다. */
+function startOfDay(moment: Date): Date {
+  return new Date(moment.getFullYear(), moment.getMonth(), moment.getDate());
+}
+
+/**
+ * 결과 카드에 적을 "언제 본 글인지". 읽을 수 없는 값이면 null 이라 그 자리가 비워진다.
+ *
+ * 어제까지는 날짜 대신 "오늘"·"어제"로 적는다. 방금 본 것을 굳이 날짜로 읽게 할 이유가 없고,
+ * 사용자가 "어제 본 거"라고 물어 받은 결과에 같은 말이 찍혀 있으면 맞게 찾았다는 것이 바로 보인다.
+ * 해가 바뀐 기록에만 연도를 붙인다.
+ */
+export function formatVisitedAt(iso: string | null, now: Date = new Date()): string | null {
+  if (iso === null) return null;
+
+  const visited = new Date(iso);
+  if (Number.isNaN(visited.getTime())) return null;
+
+  const days = Math.round(
+    (startOfDay(now).getTime() - startOfDay(visited).getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (days === 0) return "오늘";
+  if (days === 1) return "어제";
+
+  const monthDay = `${visited.getMonth() + 1}월 ${visited.getDate()}일`;
+  return visited.getFullYear() === now.getFullYear()
+    ? monthDay
+    : `${visited.getFullYear()}년 ${monthDay}`;
+}
+
 export function localNowIso(now: Date = new Date()): string {
   const pad = (value: number): string => String(value).padStart(2, "0");
 

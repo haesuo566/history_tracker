@@ -179,7 +179,12 @@ def test_detail_returns_every_message_in_order(api):
 
 
 def test_detail_restores_the_result_cards_of_each_turn(api):
-    """content 에는 답변 문장만 남는다. 카드는 남은 document_id 로 문서를 되살려 만든다."""
+    """content 에는 답변 문장만 남는다. 카드는 남은 document_id 로 문서를 되살려 만든다.
+
+    본 날짜도 함께 되살아난다. score·snippet 과 달리 문서에 남아 있는 값이라, 다시 연 대화의
+    카드에도 검색 직후와 같은 날짜가 찍혀야 한다. 저장된 값에는 시간대가 없지만 UTC 라는 사실을
+    붙여 내보낸다 — 그러지 않으면 브라우저가 로컬 시각으로 읽어 날짜가 어긋난다.
+    """
     client, db = api
     db.add(
         Document(
@@ -188,6 +193,7 @@ def test_detail_restores_the_result_cards_of_each_turn(api):
             title="김치찌개 레시피",
             full_text="본문",
             hash="hash-kimchi",
+            timestamp=datetime(2026, 8, 29, 20, 0),  # 8/30 05:00 KST
         )
     )
     db.commit()
@@ -205,6 +211,7 @@ def test_detail_restores_the_result_cards_of_each_turn(api):
             "document_id": "doc-kimchi",
             "title": "김치찌개 레시피",
             "url": "https://blog.example.com/kimchi",
+            "visited_at": "2026-08-29T20:00:00Z",
         }
     ]
 

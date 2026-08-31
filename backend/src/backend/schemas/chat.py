@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ChatRequest(BaseModel):
@@ -17,11 +17,29 @@ class ChatRequest(BaseModel):
 
 
 class ChatResult(BaseModel):
+    """검색 결과 한 줄. visited_at은 이 페이지를 수집한 시각(documents.timestamp)이다.
+
+    같은 URL을 다시 방문해도 갱신되지 않으므로(services/document.py) 정확히는 '처음 본 때'다.
+    """
+
     document_id: str
     url: str
     title: str
     score: float
     snippet: str
+    visited_at: datetime | None = None
+
+    @field_validator("visited_at")
+    @classmethod
+    def _mark_as_utc(cls, value: datetime | None) -> datetime | None:
+        """저장된 값은 tzinfo가 없는 UTC다. 나갈 때 그 사실을 붙인다.
+
+        붙이지 않으면 "2026-08-30T05:00:00"으로 직렬화되고, 브라우저의 Date는 오프셋 없는 값을
+        로컬 시각으로 읽어 한국에서는 아홉 시간이 어긋난 날짜가 카드에 찍힌다.
+        """
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
 
 
 class ChatResponse(BaseModel):

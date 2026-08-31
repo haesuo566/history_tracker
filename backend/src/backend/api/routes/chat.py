@@ -30,12 +30,16 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
             results = search_history(
                 prepared.query, db, count=prepared.desired_count, window=prepared.window
             )
-        answer = generate_recall_answer(request.message, results, *context)
+        answer = generate_recall_answer(
+            request.message, results, *context, window=prepared.window, client_now=request.client_now
+        )
     elif prepared.intent == Intent.DETAIL:
         # 지목된 문서 한 건만 근거로 삼는다. 검색을 다시 태우면 특정해 둔 그 문서가 아닌 것이 위로
         # 올라올 수 있어 지목이 무의미해진다. desired_count도 이 경로에선 뜻이 없다.
         results = [as_chat_result(prepared.target_document)]
-        answer = generate_detail_answer(request.message, prepared.target_document, *context)
+        answer = generate_detail_answer(
+            request.message, prepared.target_document, *context, client_now=request.client_now
+        )
     else:
         results = []
         answer = generate_answer(request.message, *context)

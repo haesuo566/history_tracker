@@ -114,14 +114,19 @@ async function postJson(
 /**
  * 백엔드 ChatResult 에는 document_id, score 도 있지만 화면에서 쓰지 않기로 했으므로
  * 이 경계에서 버려서 클라이언트까지 내려가지 않게 한다.
+ * visited_at 은 카드에 "언제 본 글인지"를 적는 데 쓰므로 남긴다.
  */
 function toSearchResult(raw: Record<string, unknown>): SearchResult | null {
-  const { title, url } = raw;
+  const { title, url, visited_at: visitedAt } = raw;
   if (typeof title !== "string" || typeof url !== "string" || url.length === 0) {
     return null;
   }
   // 제목이 비어 있는 문서도 있어 링크 텍스트가 사라지지 않도록 URL 로 대체한다.
-  return { title: title.length > 0 ? title : url, url };
+  return {
+    title: title.length > 0 ? title : url,
+    url,
+    visitedAt: typeof visitedAt === "string" && visitedAt.length > 0 ? visitedAt : null,
+  };
 }
 
 /** 결과 목록 통째로. 배열이 아니거나 형태가 어긋난 항목은 버려서 빈 목록으로 수렴한다. */

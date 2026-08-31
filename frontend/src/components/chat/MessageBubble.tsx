@@ -1,5 +1,6 @@
 "use client";
 
+import { formatVisitedAt } from "@/lib/clock";
 import type { ChatMessage, SearchResult } from "@/lib/types";
 
 interface MessageBubbleProps {
@@ -44,6 +45,8 @@ function displayHost(url: string): string {
 }
 
 function ResultCard({ result }: { result: SearchResult }) {
+  const visited = formatVisitedAt(result.visitedAt);
+
   return (
     <a
       href={result.url}
@@ -56,6 +59,7 @@ function ResultCard({ result }: { result: SearchResult }) {
       </span>
       <span className="block text-xs break-all text-zinc-500 dark:text-zinc-400">
         {displayHost(result.url)}
+        {visited !== null && <span className="whitespace-nowrap"> · {visited}</span>}
       </span>
     </a>
   );

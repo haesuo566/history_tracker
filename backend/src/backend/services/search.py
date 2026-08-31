@@ -197,6 +197,7 @@ def _fetch_top_results(db: Session, document_best: dict[str, tuple[float, int]],
                 title=document.title,
                 score=score,
                 snippet=snippet,
+                visited_at=document.timestamp,
             )
         )
     return results
@@ -281,6 +282,7 @@ def list_recent(window: TimeWindow, db: Session, count: int | None = None) -> li
             title=document.title,
             score=0.0,
             snippet=document.full_text[:SNIPPET_CHARS],
+            visited_at=document.timestamp,
         )
         for document in documents
     ]

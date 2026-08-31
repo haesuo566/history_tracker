@@ -1,9 +1,14 @@
 export type ChatRole = "user" | "assistant";
 
-/** 백엔드 ChatResult 중 화면에서 실제로 쓰는 필드만 남긴 형태. */
+/**
+ * 백엔드 ChatResult 중 화면에서 실제로 쓰는 필드만 남긴 형태.
+ * visitedAt 은 그 페이지를 본(수집한) 시각으로, 오프셋이 붙은 ISO 문자열이다. 날짜를 모르는
+ * 기록도 있어 null 일 수 있다.
+ */
 export interface SearchResult {
   title: string;
   url: string;
+  visitedAt: string | null;
 }
 
 /**

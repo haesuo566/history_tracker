@@ -54,6 +54,7 @@ def as_chat_result(document: Document) -> ChatResult:
         title=document.title,
         score=1.0,
         snippet=document.full_text[:SNIPPET_CHARS],
+        visited_at=document.timestamp,
     )
 
 

@@ -185,7 +185,10 @@ def load_conversation_detail(conversation_id: str, db: Session) -> ConversationD
                 created_at=message.created_at,
                 results=[
                     ConversationResult(
-                        document_id=document.document_id, title=document.title, url=document.url
+                        document_id=document.document_id,
+                        title=document.title,
+                        url=document.url,
+                        visited_at=document.timestamp,
                     )
                     for document in shown.get(message.id, ())
                 ],

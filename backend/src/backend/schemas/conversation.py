@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, field_validator
 
@@ -30,11 +30,23 @@ class ConversationResult(BaseModel):
     ChatResult를 재사용하지 않는 것은 score와 snippet 때문이다. 둘은 그때의 검색이 만든 값이라
     저장되지 않았고 재현할 수도 없다. 없는 값을 0.0이나 빈 문자열로 채워 내보내면 받는 쪽이 그것을
     실제 점수로 읽는다.
+
+    visited_at은 사정이 다르다. 문서에 남아 있는 값이라 지금 조인해도 그때와 같으므로 되살릴 수
+    있다. 그래야 다시 연 대화의 카드에도 검색 직후와 같은 날짜가 찍힌다.
     """
 
     document_id: str
     title: str
     url: str
+    visited_at: datetime | None = None
+
+    @field_validator("visited_at")
+    @classmethod
+    def _mark_as_utc(cls, value: datetime | None) -> datetime | None:
+        """저장된 값은 tzinfo가 없는 UTC다(schemas/chat.py의 같은 이름 참고)."""
+        if value is None or value.tzinfo is not None:
+            return value
+        return value.replace(tzinfo=UTC)
 
 
 class ConversationMessage(BaseModel):
