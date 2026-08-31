@@ -16,16 +16,26 @@ function jsonError(message: string, status: number): Response {
   return Response.json({ message }, { status });
 }
 
-type ParseResult = { message: string; conversationId: string | null } | { error: string };
+/** ISO 시각으로 보기에도 긴 값은 우리 클라이언트가 만든 것이 아니다. */
+const MAX_CLIENT_NOW_LENGTH = 40;
+
+type ParseResult =
+  | { message: string; conversationId: string | null; clientNow: string | null }
+  | { error: string };
 
 function parseBody(body: unknown): ParseResult {
   if (typeof body !== "object" || body === null || !("message" in body)) {
     return { error: "message 필드가 필요합니다." };
   }
 
-  const { message, conversation_id: conversationId } = body as {
+  const {
+    message,
+    conversation_id: conversationId,
+    client_now: clientNow,
+  } = body as {
     message: unknown;
     conversation_id?: unknown;
+    client_now?: unknown;
   };
   if (typeof message !== "string") {
     return { error: "message 는 문자열이어야 합니다." };
@@ -44,9 +54,21 @@ function parseBody(body: unknown): ParseResult {
     return { error: "conversation_id 가 너무 깁니다." };
   }
 
+  // 기간 없는 질의는 이 값이 없어도 그대로 동작하므로 없는 것은 정상이다. 다만 들어왔는데 시각으로
+  // 읽히지 않으면 백엔드까지 들고 가 봐야 거기서 거절당한다.
+  if (clientNow !== undefined && clientNow !== null) {
+    if (typeof clientNow !== "string" || clientNow.length > MAX_CLIENT_NOW_LENGTH) {
+      return { error: "client_now 는 ISO 시각 문자열이어야 합니다." };
+    }
+    if (Number.isNaN(Date.parse(clientNow))) {
+      return { error: "client_now 를 시각으로 읽을 수 없습니다." };
+    }
+  }
+
   return {
     message: trimmed.slice(0, MAX_MESSAGE_LENGTH),
     conversationId: typeof conversationId === "string" && conversationId.length > 0 ? conversationId : null,
+    clientNow: typeof clientNow === "string" ? clientNow : null,
   };
 }
 
@@ -67,6 +89,7 @@ export async function POST(request: NextRequest): Promise<Response> {
     const { conversationId, results, answer } = await searchHistory(
       parsed.message,
       parsed.conversationId,
+      parsed.clientNow,
       request.signal,
     );
     const payload: ChatResponseBody = { conversation_id: conversationId, results, answer };

@@ -143,14 +143,17 @@ export interface ChatReply {
  * POST /chat 으로 질의한다. recall 의도면 results 에 관련 기록 목록(없으면 빈 배열)이,
  * 그 외 의도면 answer 에 자유 텍스트 응답이 담겨 온다.
  * conversationId 를 넘기면 그 대화를 이어가고, null 이면 새 대화가 시작된다.
+ * clientNow 는 브라우저가 실어 보낸 오프셋 포함 시각으로, "어제 본 글"의 하루 경계를 잡는 데
+ * 쓰인다. 이 경계에서 만들 수 있는 값이 아니므로(서버가 선 지역의 시각이 된다) 그대로 넘긴다.
  */
 export async function searchHistory(
   message: string,
   conversationId: string | null,
+  clientNow: string | null,
   signal?: AbortSignal,
 ): Promise<ChatReply> {
   const payload = await postJson("/chat", {
-    body: { message, conversation_id: conversationId },
+    body: { message, conversation_id: conversationId, client_now: clientNow },
     timeoutMs: SEARCH_TIMEOUT_MS,
     signal,
   });

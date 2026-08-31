@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from loguru import logger
 from sqlalchemy.orm import Session
@@ -15,6 +16,8 @@ from backend.services.detail import resolve_target
 from backend.services.intent import Intent, classify_by_regex
 from backend.services.query_parser import rewrite_query
 from backend.services.results import latest_shown, load_shown_documents, past_shown
+from backend.services.timerange import TimeRangeKind, TimeWindow
+from backend.services.timerange import resolve as resolve_time_range
 
 
 @dataclass(frozen=True)
@@ -29,6 +32,10 @@ class PreprocessedMessage:
     (메시지 id -> 문서, services/results.py). 답변 생성이 같은 맥락을 다시 조회하지 않도록 여기
     실어 보낸다. shown에는 직전 턴도 그대로 들어 있다 — 재작성 호출에서만 그 턴을 빼고 넘긴다
     (후보 목록으로 이미 따로 실리기 때문이다).
+
+    window는 사용자가 말한 기간이다(services/timerange.py). 기간을 말하지 않았으면 None이고,
+    그때는 기간 조건 없이 검색한다. DETAIL 경로에서는 desired_count와 마찬가지로 뜻이 없다 —
+    지목한 문서 한 건이 이미 정해져 있다.
     """
 
     conversation_id: str
@@ -36,6 +43,7 @@ class PreprocessedMessage:
     query: str
     desired_count: int | None = None
     target_document: Document | None = None
+    window: TimeWindow | None = None
     history: Sequence[Message] = ()
     shown: Mapping[int, Sequence[Document]] = field(default_factory=dict)
 
@@ -53,14 +61,37 @@ def _settle_intent(by_regex: Intent | None, by_rewrite: Intent, has_candidates: 
     return by_rewrite
 
 
-def preprocess_message(message: str, conversation_id: str | None, db: Session) -> PreprocessedMessage:
+def _resolve_window(parsed_range, client_now: datetime | None) -> TimeWindow | None:
+    """재작성이 말한 기간을 검색 구간으로 바꾼다. 기준 시각이 없으면 경고를 남긴다.
+
+    client_now 없이 기간을 풀면 UTC 자정을 경계로 삼게 되어, 한국에서는 밤 9시 이후에 본 것이
+    '오늘'에서 통째로 빠진다. 요청이 시각을 싣지 못한 것은 클라이언트 쪽 문제라 여기서 고칠 수
+    없으므로, 어긋난 채로라도 답하되 흔적을 남긴다.
+    """
+    if parsed_range.kind is TimeRangeKind.NONE:
+        return None
+    if client_now is None:
+        logger.warning(
+            "resolving {} without the client's clock — day boundaries fall back to UTC",
+            parsed_range.kind,
+        )
+    return resolve_time_range(parsed_range, client_now)
+
+
+def preprocess_message(
+    message: str,
+    conversation_id: str | None,
+    db: Session,
+    client_now: datetime | None = None,
+) -> PreprocessedMessage:
     """검색·응답 단계로 넘기기 전에 대화 처리와 의도 판단, 질의 재작성을 한 번에 끝낸다.
 
     대화 처리는 이어갈 대화를 확정하고 이번 입력을 저장하는 것까지다. 그다음 이 턴이 무엇인지와
     무엇을 검색할지를 정하는데, 둘은 한 번의 Gemini 호출로 함께 받는다. '그거 뭐였지'가 무엇을
     가리키는지 찾는 일과 이 턴이 recall인지 판단하는 일이 같은 추론이라서다. 그래서 의도 분류에도
     대화 맥락이 필요하며, 그 맥락을 들고 있는 곳이 바로 이 재작성 호출이다. detail 턴이 지목한
-    문서를 고르는 것도 같은 이유로 같은 호출에 얹는다(services/detail.py).
+    문서를 고르는 것도 같은 이유로 같은 호출에 얹는다(services/detail.py). 사용자가 말한 기간
+    역시 같은 호출이 라벨로 받아, 여기서 실제 구간으로 바꾼다(services/timerange.py).
 
     두 판정을 합치는 규칙은 _settle_intent에 있다.
     """
@@ -83,8 +114,9 @@ def preprocess_message(message: str, conversation_id: str | None, db: Session) -
         )
 
     candidates = latest_shown(shown)
-    parsed = rewrite_query(message, history, candidates, past_shown(shown))
+    parsed = rewrite_query(message, history, candidates, past_shown(shown), client_now)
     intent = _settle_intent(by_regex, parsed.intent, bool(candidates))
+    window = _resolve_window(parsed.time_range, client_now)
 
     target_document = None
     if intent is Intent.DETAIL:
@@ -96,13 +128,14 @@ def preprocess_message(message: str, conversation_id: str | None, db: Session) -
             intent = Intent.RECALL
 
     logger.debug(
-        "message preprocessed: {!r} -> intent={} query={!r} (regex={} rewrite={} target={!r})",
+        "message preprocessed: {!r} -> intent={} query={!r} (regex={} rewrite={} target={!r} period={})",
         message,
         intent,
         parsed.query,
         by_regex,
         parsed.intent,
         target_document.title if target_document else None,
+        window.label if window else None,
     )
     return PreprocessedMessage(
         conversation_id=conversation_id,
@@ -110,6 +143,7 @@ def preprocess_message(message: str, conversation_id: str | None, db: Session) -
         query=parsed.query,
         desired_count=parsed.desired_count,
         target_document=target_document,
+        window=window,
         history=history,
         shown=shown,
     )

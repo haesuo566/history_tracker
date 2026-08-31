@@ -38,7 +38,8 @@ def chat(monkeypatch):
     )
     seen: dict = {}
 
-    def fake_rewrite_query(message, history=(), candidates=(), shown=None):
+    def fake_rewrite_query(message, history=(), candidates=(), shown=None, client_now=None):
+        seen["client_now"] = client_now
         seen["history"] = [(past.role, past.content) for past in history]
         seen["candidates"] = [candidate.document_id for candidate in candidates]
         seen["listed_turns"] = [

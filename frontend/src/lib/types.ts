@@ -18,10 +18,13 @@ export type ChatMessage =
 /**
  * POST /api/chat 요청 본문.
  * conversation_id 를 보내면 그 대화를 이어가고, 생략하거나 null 이면 새 대화가 시작된다.
+ * client_now 는 오프셋이 붙은 브라우저의 현재 시각이다(lib/clock.ts). "어제 본 글" 같은 질의의
+ * 하루 경계를 사용자의 자정으로 잡는 데 쓰이며, 서버는 이 값을 만들 수 없다.
  */
 export interface ChatRequestBody {
   message: string;
   conversation_id?: string | null;
+  client_now?: string;
 }
 
 /**

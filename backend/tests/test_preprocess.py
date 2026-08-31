@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
@@ -10,10 +12,14 @@ from backend.services.conversation import append_message, ensure_conversation
 from backend.services.intent import Intent
 from backend.services.preprocess import preprocess_message
 from backend.services.query_parser import ParsedQuery
+from backend.services.timerange import TimeRange, TimeRangeKind
 
 KIMCHI = ("doc-kimchi", "김치찌개 레시피", "https://blog.example.com/kimchi-jjigae")
 DOENJANG = ("doc-doenjang", "된장찌개 끓이는 법", "https://recipe.example.com/doenjang")
 BUDAE = ("doc-budae", "부대찌개 맛집", "https://map.example.com/budae")
+
+KST = timezone(timedelta(hours=9))
+NOW = datetime(2026, 8, 31, 12, 0, tzinfo=KST)
 
 
 @pytest.fixture
@@ -27,12 +33,16 @@ def db():
 
 
 def stub_rewrite(
-    monkeypatch, intent: Intent, target_index: int | None = None, query: str | None = None
+    monkeypatch,
+    intent: Intent,
+    target_index: int | None = None,
+    query: str | None = None,
+    time_range: TimeRange | None = None,
 ) -> list[dict]:
     """재작성을 대체해 원하는 판정을 돌려주게 하고, 호출마다 받은 입력을 담는 리스트를 준다."""
     calls: list[dict] = []
 
-    def fake_rewrite_query(message, history=(), candidates=(), shown=None):
+    def fake_rewrite_query(message, history=(), candidates=(), shown=None, client_now=None):
         calls.append(
             {
                 "history": [(past.role, past.content) for past in history],
@@ -41,11 +51,13 @@ def stub_rewrite(
                     [document.title for document in documents]
                     for _, documents in sorted((shown or {}).items())
                 ],
+                "client_now": client_now,
             }
         )
         return ParsedQuery(
             intent=intent,
             target_index=target_index,
+            time_range=time_range or TimeRange(),
             query=query if query is not None else f"{message}(재작성)",
         )
 
@@ -216,6 +228,44 @@ def test_greeting_never_reaches_the_rewrite(db, monkeypatch):
     assert prepared.intent is Intent.ETC
     assert prepared.query == "안녕"  # 재작성을 건너뛰었으니 원문 그대로다
     assert calls == []
+
+
+def test_a_stated_period_becomes_a_search_window(db, monkeypatch):
+    """재작성은 '어제'라는 라벨만 고르고, 그것이 며칠인지는 전처리가 정한다."""
+    stub_rewrite(monkeypatch, Intent.RECALL, time_range=TimeRange(kind=TimeRangeKind.YESTERDAY))
+
+    prepared = preprocess_message("어제 본 리액트 글 찾아줘", None, db, NOW)
+
+    assert prepared.window.since == datetime(2026, 8, 29, 15, 0)  # 8/30 00:00 KST
+    assert prepared.window.until == datetime(2026, 8, 30, 15, 0)  # 8/31 00:00 KST
+    assert prepared.window.label == "어제(8월 30일)"
+
+
+def test_no_period_leaves_the_search_unbounded(db, monkeypatch):
+    """기간을 말하지 않은 질의까지 어떤 구간으로 잘라내면 안 된다."""
+    stub_rewrite(monkeypatch, Intent.RECALL)
+
+    prepared = preprocess_message("리액트 상태관리 글 찾아줘", None, db, NOW)
+
+    assert prepared.window is None
+
+
+def test_the_rewrite_receives_the_clients_clock(db, monkeypatch):
+    """'8월 20일에 본 거'의 연도를 정하려면 모델이 오늘을 알아야 한다."""
+    calls = stub_rewrite(monkeypatch, Intent.RECALL)
+
+    preprocess_message("8월 20일에 본 글 찾아줘", None, db, NOW)
+
+    assert calls[0]["client_now"] == NOW
+
+
+def test_a_greeting_still_skips_the_period_work(db, monkeypatch):
+    """정규식이 잡담으로 끊은 턴은 재작성을 타지 않으므로 기간도 없다."""
+    stub_rewrite(monkeypatch, Intent.RECALL, time_range=TimeRange(kind=TimeRangeKind.YESTERDAY))
+
+    prepared = preprocess_message("안녕", None, db, NOW)
+
+    assert prepared.window is None
 
 
 def test_rewrite_sees_the_conversation_up_to_the_previous_turn(db, monkeypatch):

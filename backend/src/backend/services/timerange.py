@@ -78,11 +78,15 @@ _KIND_NAMES = {
 }
 
 
-def _local_now(client_now: datetime | None) -> datetime:
+def local_now(client_now: datetime | None) -> datetime:
     """기준이 될 사용자 현재 시각. 없거나 tzinfo가 없으면 UTC로 본다.
 
     클라이언트가 시각을 싣지 못한 요청에서도 기간 검색이 완전히 멈추지는 않게 하려는 폴백이다.
-    한국에서 쓰면 자정 전후 아홉 시간이 어긋나므로, 부르는 쪽(api/routes/chat.py)이 경고를 남긴다.
+    한국에서 쓰면 자정 전후 아홉 시간이 어긋나므로, 부르는 쪽(services/preprocess.py)이 경고를
+    남긴다.
+
+    재작성 호출도 이 값을 쓴다. "8월 20일에 본 거"의 연도를 정하려면 모델이 오늘이 며칠인지
+    알아야 한다(services/query_parser.py).
     """
     if client_now is None:
         return datetime.now(UTC)
@@ -187,7 +191,7 @@ def resolve(spec: TimeRange | None, client_now: datetime | None) -> TimeWindow |
     if spec is None or spec.kind is TimeRangeKind.NONE:
         return None
 
-    now = _local_now(client_now)
+    now = local_now(client_now)
     zone = now.tzinfo
     bounds = _bounds(spec, now.date(), zone)
     if bounds is None:

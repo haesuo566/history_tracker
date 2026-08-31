@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { localNowIso } from "@/lib/clock";
 import type {
   ChatMessage,
   ChatRequestBody,
@@ -263,6 +264,9 @@ export function useChatSessions() {
       const requestBody: ChatRequestBody = {
         message: text,
         conversation_id: conversationIdsRef.current.get(sessionId) ?? null,
+        // "어제 본 글"의 하루 경계는 이 사람의 자정이다. 라우트 핸들러는 서버에서 돌아 브라우저의
+        // 시간대를 알 수 없으므로 여기서 실어 보낸다.
+        client_now: localNowIso(),
       };
       const response = await fetch("/api/chat", {
         method: "POST",

@@ -16,7 +16,7 @@ router = APIRouter(tags=["chat"])
 
 @router.post("/chat")
 def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    prepared = preprocess_message(request.message, request.conversation_id, db)
+    prepared = preprocess_message(request.message, request.conversation_id, db, request.client_now)
 
     # 답변은 재작성된 검색어가 아니라 원문을 근거로 만든다. 사용자가 실제로 물은 문장이다. 대신
     # 앞선 대화와 그 턴들이 보여준 목록을 함께 넘겨, '아까 그거'가 무엇인지 답변 단계도 알게 한다.
