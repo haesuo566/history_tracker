@@ -33,6 +33,10 @@ async function sendRecord(record) {
 // 않던 문제라서, 큐에 손대는 구간만 프라미스 체인으로 직렬화한다.
 let queueLock = Promise.resolve();
 
+// 큐를 비운 시점을 구분하는 카운터. 재시도 루프는 시작할 때 값을 잡아두고 매 건마다
+// 비교해, 도중에 사용자가 큐를 비웠으면 남은 건을 보내지 않고 빠져나온다.
+let queueGeneration = 0;
+
 function withQueueLock(fn) {
   const run = queueLock.then(fn, fn);
   queueLock = run.catch(() => {});
@@ -54,6 +58,18 @@ async function enqueueForRetry(record) {
     } catch (e) {
       console.error('[visit-tracker] 재시도 큐 저장 실패', e);
     }
+  });
+}
+
+// 재시도 큐를 통째로 버린다. 서버 주소를 잘못 넣어두고 브라우징한 뒤처럼, 쌓인 건들이
+// 성공할 리 없는데 30초마다 계속 재시도되는 상황을 사용자가 직접 끊을 수 있게 한다.
+async function clearQueue() {
+  return withQueueLock(async () => {
+    const { queue = [] } = await chrome.storage.local.get('queue');
+    queueGeneration += 1;
+    await chrome.storage.local.set({ queue: [] });
+    console.log('[visit-tracker] 재시도 큐 비움', queue.length);
+    return queue.length;
   });
 }
 
@@ -84,9 +100,19 @@ async function collectPage(message) {
   }
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type !== 'PAGE_CONTENT') return;
-  collectPage(message);
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'PAGE_CONTENT') {
+    collectPage(message);
+    return;
+  }
+  if (message?.type === 'CLEAR_QUEUE') {
+    // 비동기 응답을 쓰려면 리스너가 true를 반환해 채널을 열어둬야 한다.
+    clearQueue().then(
+      (cleared) => sendResponse({ ok: true, cleared }),
+      (e) => sendResponse({ ok: false, error: String(e) })
+    );
+    return true;
+  }
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -132,7 +158,9 @@ async function retryQueue() {
   const { queue = [] } = await chrome.storage.local.get('queue');
   if (queue.length === 0) return;
 
+  const generation = queueGeneration;
   for (const record of queue) {
+    if (generation !== queueGeneration) return; // 도중에 큐를 비웠다
     const sent = await sendRecord(record);
     if (!sent) continue;
 

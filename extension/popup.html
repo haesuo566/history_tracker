@@ -18,6 +18,8 @@
     .pop-version { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
     .pop-body { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 11px; }
+
+    .queue-cell { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
   </style>
 </head>
 <body>
@@ -51,7 +53,10 @@
     <dl class="info-list">
       <div class="info-row">
         <dt>재전송 대기</dt>
-        <dd><span class="badge" id="queueCount">-</span></dd>
+        <dd class="queue-cell">
+          <span class="badge" id="queueCount">-</span>
+          <button type="button" class="btn-mini" id="clearQueue" disabled>비우기</button>
+        </dd>
       </div>
       <div class="info-row">
         <dt>전송 대상</dt>
