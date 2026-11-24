@@ -11,8 +11,8 @@ from backend.db.init_db import CHUNK_FTS_DDL, vec_chunks_ddl
 from backend.models.app_setting import AppSetting
 from backend.models.chunk import Chunk
 from backend.models.document import Document
-from backend.services import indexing as indexing_service
-from backend.services.indexing import MAX_TITLE_SHARE, run_indexing_batch, split_embedding_budget
+from backend.services.collection import indexing as indexing_service
+from backend.services.collection.indexing import MAX_TITLE_SHARE, run_indexing_batch, split_embedding_budget
 from backend.services.runtime_settings import reset_cache, save_index_state
 
 DIM = 4

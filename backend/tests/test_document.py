@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from backend.db.base import Base
 from backend.models.document import Document
 from backend.schemas.collect import CollectRequest
-from backend.services.document import document_hash, save_collected_document
+from backend.services.collection.document import document_hash, save_collected_document
 
 
 @pytest.fixture

@@ -8,14 +8,14 @@ from backend.db.session import engine, is_sqlite
 # ORM 테이블 등록용
 from backend.models import app_setting, chunk, conversation, document  # noqa: F401
 from backend.models.conversation import TITLE_MAX_CHARS
-from backend.services.document import document_hash
+from backend.services.collection.document import document_hash
 
 
 def vec_chunks_ddl(dim: int) -> str:
     """vec_chunks 생성문. 차원은 그때 쓰는 임베딩이 정하므로 인자로 받는다.
 
     가상 테이블은 차원을 바꾸는 ALTER가 없어, 임베딩을 바꾸면 테이블을 지우고 다시 만들어야
-    한다(services.reindex).
+    한다(services.collection.reindex).
     """
     return f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0(
@@ -46,6 +46,7 @@ def init_db() -> None:
             _ensure_chunk_fts_columns(conn)
             _ensure_column(conn, "conversations", "title", f"VARCHAR({TITLE_MAX_CHARS + 1})")
             _ensure_column(conn, "messages", "result_document_ids", "JSON")
+            _ensure_column(conn, "messages", "dashboard", "JSON")
             _migrate_document_hash_to_url(conn)
 
 
@@ -77,7 +78,7 @@ def _ensure_chunk_fts_columns(conn) -> None:
     문서는 배치가 건너뛰므로 재색인 없이는 채워지지 않는다.
 
     그때까지 전문 검색은 빈 테이블을 보고 벡터 검색만 결과를 낸다 — 검색이 아예 실패하는 것보다는
-    낫다는 판단으로, `services.search._vector_search_if_usable` 이 반대 상황에서 하는 것과 같다.
+    낫다는 판단으로, `services.search.hybrid._vector_search_if_usable` 이 반대 상황에서 하는 것과 같다.
     """
     columns = {row[1] for row in conn.execute(text("PRAGMA table_info(chunk_fts)")).all()}
     if not columns or "title" in columns:
@@ -96,7 +97,7 @@ HASH_SCHEME_URL = "url"
 
 
 def _migrate_document_hash_to_url(conn) -> None:
-    """documents.hash 를 sha256(url) 로 다시 계산한다 (services.document.document_hash 참고).
+    """documents.hash 를 sha256(url) 로 다시 계산한다 (services.collection.document.document_hash 참고).
 
     옛 방식은 sha256(url + content) 였다. 이미 쌓인 행은 그 해시를 그대로 들고 있어서, 그냥
     두면 같은 URL 이 새 방식으로 한 번 더 들어온다. hash 에 unique 제약이 걸려 있으므로 재계산

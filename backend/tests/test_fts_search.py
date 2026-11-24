@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from backend.db.init_db import CHUNK_FTS_DDL
-from backend.services import search as search_service
-from backend.services.search import _fts_search
+from backend.services.search import hybrid as search_service
+from backend.services.search.hybrid import _fts_search
 
 TITLE = "리액트 훅 정리"
 BODY = "useEffect 의존성 배열을 비우면 마운트에만 실행된다"

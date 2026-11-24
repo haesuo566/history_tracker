@@ -2,8 +2,8 @@
 
 import pytest
 
-from backend.services import search as search_service
-from backend.services.search import _vector_search_if_usable
+from backend.services.search import hybrid as search_service
+from backend.services.search.hybrid import _vector_search_if_usable
 from tests.test_runtime_settings import runtime_settings
 
 

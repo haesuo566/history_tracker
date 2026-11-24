@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from backend.db.session import get_db
 from backend.schemas.reindex import ReindexResponse
-from backend.services.reindex import reset_index
-from backend.services.tei import TeiError
+from backend.services.collection.reindex import reset_index
+from backend.services.llm.tei import TeiError
 
 router = APIRouter(tags=["reindex"])
 

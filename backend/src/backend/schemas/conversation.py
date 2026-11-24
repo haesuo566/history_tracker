@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, field_validator
 
 from backend.models.conversation import TITLE_MAX_CHARS
+from backend.schemas.dashboard import Dashboard
 
 
 class ConversationSummary(BaseModel):
@@ -52,15 +53,18 @@ class ConversationResult(BaseModel):
 class ConversationMessage(BaseModel):
     """대화에 남은 메시지 한 건.
 
-    results는 그 턴이 사용자에게 보여준 결과 목록을 보여준 순서대로 되살린 것이다(services/results.py).
+    results는 그 턴이 사용자에게 보여준 결과 목록을 보여준 순서대로 되살린 것이다(services/conversation/results.py).
     결과가 없던 턴, 결과 목록을 남기지 않는 detail 턴, 그리고 result_document_ids 컬럼이 생기기 전에
     쌓인 메시지는 빈 목록이다.
+
+    dashboard는 대시보드 턴이 보여준 대시보드를 저장해 둔 그대로 되살린 것이다. 다른 턴은 None이다.
     """
 
     role: str
     content: str
     created_at: datetime
     results: list[ConversationResult] = []
+    dashboard: Dashboard | None = None
 
 
 class ConversationDetail(BaseModel):

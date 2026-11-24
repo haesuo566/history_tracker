@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from backend.db.session import get_db
 from backend.schemas.collect import CollectRequest, CollectResponse
-from backend.services.document import save_collected_document
+from backend.services.collection.document import save_collected_document
 
 router = APIRouter(tags=["collect"])
 

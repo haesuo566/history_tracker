@@ -5,14 +5,14 @@ from sqlalchemy.orm import Session
 from backend.db.base import Base
 from backend.models.conversation import Conversation, Message, MessageRole
 from backend.models.document import Document
-from backend.services.conversation import (
+from backend.services.chat.query_parser import _build_contents
+from backend.services.conversation.store import (
     append_message,
     ensure_conversation,
     load_conversation,
     load_recent_messages,
     rename_conversation,
 )
-from backend.services.query_parser import _build_contents
 
 
 @pytest.fixture

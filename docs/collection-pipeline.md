@@ -9,8 +9,8 @@
 | --- | --- |
 | 수집 · 전송 | `extension/background.js` |
 | 본문 추출 | `extension/content.js` (+ `extension/Readability.js`) |
-| 수신 · 저장 | `api/routes/collect.py`, `services/document.py`, `models/document.py` |
-| 색인 | `api/routes/batch.py`, `services/indexing.py`, `services/chunking.py`, `services/embedding.py` |
+| 수신 · 저장 | `api/routes/collect.py`, `services/collection/document.py`, `models/document.py` |
+| 색인 | `api/routes/batch.py`, `services/collection/indexing.py`, `services/collection/chunking.py`, `services/llm/embedding.py` |
 | 테이블 생성 | `db/init_db.py` |
 | 색인 트리거 UI | `frontend/src/hooks/useBatch.ts`, `frontend/src/components/chat/BatchControl.tsx` |
 
@@ -264,7 +264,7 @@ flowchart LR
 
 ### 청킹
 
-`services/chunking.py`. 청크 하나의 크기는 **지금 쓰는 임베딩의 입력 한계에서 자동으로 정해진다**
+`services/collection/chunking.py`. 청크 하나의 크기는 **지금 쓰는 임베딩의 입력 한계에서 자동으로 정해진다**
 (`core.model_catalog.chunk_chars_for`). 설정 항목이 아니다.
 
 | 임베딩 | 입력 한계 | 청크 크기 |
@@ -285,7 +285,7 @@ TEI도 그렇다). 그래서 넘치지 않는 쪽으로 보수적으로 잡는�
 제목과 개행만큼 한계를 넘는다. 위에서 본 대로 넘친 뒷부분은 오류 없이 버려진다.
 
 ```
-services.indexing.split_embedding_budget
+services.collection.indexing.split_embedding_budget
 
 청크 문자 수 = max_chars - len(제목) - 1
 제목         = 앞에서 max_chars × 0.25 까지만 (그보다 길면 잘라서 임베딩)

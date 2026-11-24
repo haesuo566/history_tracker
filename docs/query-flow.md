@@ -10,13 +10,14 @@
 | 입력 · 세션 상태 | `frontend/src/hooks/useChatSessions.ts`, `components/chat/ChatInput.tsx` |
 | 클라이언트 ↔ 백엔드 경계 | `frontend/src/app/api/chat/route.ts`, `frontend/src/lib/backend.ts` |
 | 진입점 | `api/routes/chat.py` |
-| 전처리(대화 · 의도 · 재작성) | `services/preprocess.py`, `services/intent.py`, `services/query_parser.py` |
-| 기간 해석 | `services/timerange.py`, `frontend/src/lib/clock.ts` |
-| 보여준 목록 복원 · 프롬프트 조립 | `services/results.py`, `services/prompt.py` |
-| 지목 대상 특정 | `services/detail.py` |
-| 검색 | `services/search.py`, `services/embedding.py`, `services/tokenizer.py` |
-| 답변 생성 | `services/answer.py` |
-| 대화 저장 | `services/conversation.py` |
+| 전처리(대화 · 의도 · 재작성) | `services/chat/preprocess.py`, `services/chat/intent.py`, `services/chat/query_parser.py` |
+| 기간 해석 | `services/chat/timerange.py`, `frontend/src/lib/clock.ts` |
+| 보여준 목록 복원 · 프롬프트 조립 | `services/conversation/results.py`, `services/conversation/prompt.py` |
+| 지목 대상 특정 | `services/chat/detail.py` |
+| 검색 | `services/search/hybrid.py`, `services/llm/embedding.py`, `services/search/tokenizer.py` |
+| 답변 생성 | `services/chat/answer.py` |
+| 대시보드 | `services/dashboard/semantic_layer.py`, `services/dashboard/planner.py`, `services/dashboard/builder.py` ([dashboard.md](dashboard.md)) |
+| 대화 저장 | `services/conversation/store.py` |
 
 ## 한눈에 보기
 
@@ -39,13 +40,15 @@ flowchart TD
     RQ -->|"없음 + 기간만"| SL["기간 내 최근 순 나열<br/>→ 그 목록 근거로 답변"]
     R -->|detail| SD["지목 문서 1건<br/>→ 그 본문 근거로 답변"]
     R -->|etc| SE["검색 없이<br/>일반 대화 응답"]
+    R -->|dashboard| SB["시멘틱 레이어로 구성 → SQL 집계<br/>(만들 수 없는 조건이면 거절)"]
 
-    SR --> SAVE["답변 저장<br/>(+ 보여준 문서 id 목록)"]
+    SR --> SAVE["답변 저장<br/>(+ 보여준 문서 id 목록 / 대시보드)"]
     SL --> SAVE
     SD --> SAVE
     SE --> SAVE
-    SAVE --> RES["ChatResponse<br/>conversation_id · results · answer"]
-    RES --> FE2["결과 카드 + 답변 말풍선"]
+    SB --> SAVE
+    SAVE --> RES["ChatResponse<br/>conversation_id · results · answer · dashboard"]
+    RES --> FE2["결과 카드 / 대시보드 + 답변 말풍선"]
 ```
 
 한 턴에서 **Gemini는 최대 3번** 불린다 — 전처리의 재작성 1회, `recall`이면 질의 임베딩 1회,
@@ -180,13 +183,15 @@ append_message(conversation_id, MessageRole.USER, message, db)   # 그다음 저
 
 ### ② 정규식 1차 분류
 
-Gemini를 부르기 전에 확실한 것만 값싸게 가른다(`intent.py`).
+Gemini를 부르기 전에 확실한 것만 값싸게 가른다(`services/chat/intent.py`).
 
 | 패턴 | 예 | 판정 |
 | --- | --- | --- |
 | 빈 문자열 | `""` | `ETC` |
 | 기록 관련 키워드 | 찾아, 검색, 북마크, 방문 기록, url, 링크 줘 … | `RECALL` |
 | 회상 표현 + 대상 명사 | "어제 **봤던** 그 **블로그**" | `RECALL` |
+| 집계 표현 | 그래프, 차트, 대시보드, 통계, 추이, 몇 개, 사이트별, 요일별 … | `DASHBOARD` |
+| 기록 관련 + 집계 표현이 함께 | "어제 본 **차트** 라이브러리 글 **찾아줘**" | `None` (판정 불가) |
 | 인사·감탄만 | "안녕", "ㅋㅋ", "고마워" | `ETC` |
 | 그 외 | "리액트 상태관리 어떻게 했었지" | `None` (판정 불가) |
 
@@ -214,10 +219,10 @@ history 안의 assistant 턴 중 result_document_ids 가 있는 것을 모두 �
 ```
 
 제목과 URL을 메시지에 **복제해 두지 않는 이유**는 문서가 불변이기 때문이다. 같은 URL을 다시
-수집해도 무시하므로(`services/document.py`의 `on_conflict_do_nothing`) 지금 조인해도 그때 보여준
+수집해도 무시하므로(`services/collection/document.py`의 `on_conflict_do_nothing`) 지금 조인해도 그때 보여준
 값과 같다. 스냅샷으로 지킬 것이 없다.
 
-이 맵은 두 갈래로 쓰인다(`services/results.py`).
+이 맵은 두 갈래로 쓰인다(`services/conversation/results.py`).
 
 | 함수 | 무엇을 주나 | 어디에 쓰나 |
 | --- | --- | --- |
@@ -239,7 +244,7 @@ history 안의 assistant 턴 중 result_document_ids 가 있는 것을 모두 �
 
 ```python
 class ParsedQuery(BaseModel):
-    intent: Intent              # recall | detail | etc
+    intent: Intent              # recall | detail | dashboard | etc
     target_index: int | None    # detail 이면 지목한 항목의 1-based 번호
     time_range: TimeRange       # "어제", "지난주" 같은 기간을 라벨로
     query: str                  # 검색 엔진에 넣기 좋게 다듬은 검색어
@@ -280,7 +285,7 @@ class ParsedQuery(BaseModel):
 위해서다. 사이에 user 발화를 넣으면 그 턴 구조가 무너진다. 반대로 후보 목록은 별개 발화로 두는데,
 "판단 대상은 마지막 사용자 메시지"라는 지시를 흐리지 않기 위해서다.
 
-이 조립은 `services/prompt.py`의 `render_history`가 맡고 답변 생성도 같은 함수를 쓴다. 규칙이
+이 조립은 `services/conversation/prompt.py`의 `render_history`가 맡고 답변 생성도 같은 함수를 쓴다. 규칙이
 갈리면 재작성은 "아까 그 두 번째"가 무엇인지 아는데 답변은 모르는 상태가 된다.
 
 응답이 스키마로 파싱되지 않으면 `ETC`로 눕혀 일반 대화로 답한다 — 의도조차 못 받은 상황에서
@@ -295,11 +300,14 @@ class ParsedQuery(BaseModel):
 | — | `detail` | 없음 | **`recall`** | 지목할 목록이 없으면 상세 요청이 될 수 없다 |
 | `recall` | `detail` | 있음 | `detail` | 정규식은 이 둘을 못 가리므로 재작성의 세분화를 받는다 |
 | `recall` | `etc` | — | **`recall`** | 정규식이 확신한 '기록 관련'은 잡담으로 뒤집지 않는다 |
+| `recall` | `dashboard` | — | `dashboard` | "방문 기록 한눈에 정리해줘"처럼 기록 낱말이 붙은 집계 질의 |
 | `recall` | `recall` | — | `recall` | |
+| `dashboard` | `recall` | — | `recall` | "통계학 블로그 글"처럼 낱말만 겹친 것은 문장을 읽은 쪽을 따른다 |
+| `dashboard` | 그 외 | — | `dashboard` | 그래프를 달라는데 말로만 답하지 않는다 |
 | `None` | 그대로 | — | 재작성 판정 | |
 
-즉 정규식이 `RECALL`이라고 본 턴은 절대 `ETC`로 떨어지지 않고, `detail`이라는 **세분화만**
-받아들인다.
+즉 정규식이 `RECALL`이라고 본 턴은 절대 `ETC`로 떨어지지 않고, `detail`·`dashboard`라는
+**세분화만** 받아들인다.
 
 ### ⑤ 지목 대상 특정 (`resolve_target`)
 
@@ -338,7 +346,7 @@ flowchart TD
 그럴듯하게 답하는 것이 가장 나쁜 실패라, 그럴 바엔 기록을 새로 뒤지는 쪽이 낫다는 판단이다.
 동점(1·2위 차 0.05 미만)도 실패로 본다 — 그 상태에서 고르는 것은 찍는 것과 같다.
 
-### ⑤ 기간 라벨 → 구간 (`services/timerange.py`)
+### ⑤ 기간 라벨 → 구간 (`services/chat/timerange.py`)
 
 모델은 라벨만 고르고 그것이 며칠인지는 서버가 정한다. '지난주 월요일이 며칠인지'를 모델에게
 계산시키면 틀려도 티가 나지 않은 채 엉뚱한 기간을 뒤지게 되는데, 이 계산은 규칙이 정해져 있어
@@ -581,6 +589,15 @@ URL: …
 
 ---
 
+## 2-D단계 — `dashboard`: 모아서 세기
+
+기록을 찾지 않고 집계한다. Gemini 는 질의를 시멘틱 레이어의 이름(측정값·기준·조건)으로 옮긴
+구성(`DashboardPlan`)만 돌려주고, SQL 은 서버가 레이어 정의에서 만들어 실행한다. 기간은 전처리가
+이미 푼 구간을 그대로 쓴다. 레이어에 없는 개념을 물으면 비슷한 것으로 바꿔 그리지 않고 거절한다.
+답변 문장은 Gemini 없이 만든다. 자세한 내용은 [dashboard.md](dashboard.md).
+
+---
+
 ## 3단계 — 저장과 응답
 
 답변을 만들고 나면 assistant 메시지를 저장하는데, 이때 **그 턴이 보여준 문서 id 목록**을 함께
@@ -592,6 +609,7 @@ URL: …
 | `recall` | 검색 결과 N건 | 그 N건의 id (없으면 `NULL`) |
 | `detail` | 지목된 1건 | **`NULL` — 갱신하지 않음** |
 | `etc` | `[]` | `NULL` |
+| `dashboard` | `[]` | `NULL` — 대신 `messages.dashboard`에 대시보드를 데이터째 남긴다 |
 
 `detail` 턴이 목록을 갱신하지 않는 것이 핵심이다. 이 턴은 새 목록을 보여준 것이 아니라 이미
 보여준 목록에서 하나를 설명한 턴이다. 지목된 한 건으로 갈아치우면 **"아니, 세 번째 것"** 같은
@@ -619,9 +637,12 @@ URL: …
       "visited_at": "2026-08-29T20:00:00Z"
     }
   ],
-  "answer": "어제 보신 글은 …"
+  "answer": "어제 보신 글은 …",
+  "dashboard": null
 }
 ```
+
+`dashboard`는 대시보드 턴에서만 채워진다(형태는 `schemas/dashboard.py`의 `Dashboard`).
 
 `visited_at`은 UTC임을 밝혀(`Z`) 내보낸다. 저장된 값에는 tzinfo가 없어 그대로 직렬화하면
 `"2026-08-29T20:00:00"`이 되고, 브라우저의 `Date`는 오프셋 없는 값을 **로컬 시각으로** 읽어
@@ -641,6 +662,8 @@ URL: …
 | `detail` | 1 | — | 1 | **2** |
 | `detail`이나 본문이 빈 문서 | 1 | — | — | **1** |
 | `detail` → `recall` 강등 | 1 | 1 | 1 | **3** |
+| `dashboard` | 1 | — | 1 (구성) | **2** |
+| `dashboard`이나 정규식 그물로 거절 | 1 | — | — | **1** |
 
 프론트 타임아웃 30초 안에 이것이 전부 순차로 일어난다. 스트리밍이 아니므로 답변이 다 만들어질
 때까지 화면에는 로딩 상태만 보인다.
@@ -664,6 +687,9 @@ URL: …
 | 검색 결과 0건 | `results: []` + "찾지 못했다"는 답변 |
 | 검색이 집은 문서가 이미 삭제됨 | 경고 로그 남기고 그 건만 건너뜀 |
 | `detail` 대상의 본문이 비어 있음 | Gemini 없이 고정 문구 |
+| 대시보드에 만들 수 없는 조건이 있음 | 거절 — 그 조건과 만들 수 있는 것을 밝힘 |
+| 대시보드 구성 응답을 해석할 수 없음 / 쓸 패널이 없음 | 다시 물어 달라는 고정 문구 |
+| 저장된 대시보드를 읽을 수 없음 | 경고 후 그 대시보드만 빼고 대화를 연다 |
 | 백엔드 연결 실패·타임아웃 | 라우트 핸들러가 `502` + 안내 문구 |
 | 사용자가 중지 | `499`, 말풍선 추가하지 않음 |
 
@@ -693,3 +719,4 @@ URL: …
 - [`README.md`](../README.md) — 전체 구성, 환경변수, 의도 분류 요약
 - [`collection-pipeline.md`](collection-pipeline.md) — 수집 · 색인 파이프라인
 - [`conversations-api.md`](conversations-api.md) — 대화 목록 · 조회 · 이름변경 · 삭제 API
+- [`dashboard.md`](dashboard.md) — 시멘틱 레이어와 대시보드

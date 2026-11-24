@@ -12,11 +12,18 @@ from backend.db.base import Base
 from backend.db.session import get_db
 from backend.models.conversation import Conversation, Message, MessageRole
 from backend.models.document import Document
-from backend.services.conversation import (
+from backend.schemas.dashboard import (
+    ChartType,
+    Dashboard,
+    DashboardPanel,
+    DashboardPoint,
+)
+from backend.services.conversation.store import (
     TITLE_MAX_CHARS,
     append_message,
     ensure_conversation,
 )
+from backend.services.dashboard.semantic_layer import DimensionName, MeasureName
 
 
 @pytest.fixture
@@ -351,3 +358,54 @@ def test_delete_of_an_empty_conversation_works(api):
     conversation_id = ensure_conversation(None, db)
 
     assert client.delete(f"/conversations/{conversation_id}").status_code == 204
+
+
+def test_detail_restores_a_dashboard_as_it_was_shown(api):
+    """대시보드는 다시 실행하지 않고 저장한 그대로 되살린다. 그사이 쌓인 기록이 숫자를 바꾸면 안 된다."""
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+    shown = Dashboard(
+        title="요일별",
+        period="지난주(8월 24일~8월 30일)",
+        panels=[
+            DashboardPanel(
+                title="요일별 본 페이지 수",
+                chart=ChartType.BAR,
+                measure=MeasureName.PAGE_COUNT,
+                measure_label="본 페이지 수",
+                unit="개",
+                dimension=DimensionName.WEEKDAY,
+                dimension_label="요일",
+                points=[DashboardPoint(key="0", label="월", value=3)],
+            )
+        ],
+    )
+    append_message(conversation_id, MessageRole.USER, "지난주 요일별 그래프", db)
+    append_message(conversation_id, MessageRole.ASSISTANT, "만들었습니다", db, dashboard=shown)
+
+    messages = client.get(f"/conversations/{conversation_id}").json()["messages"]
+
+    assert messages[0]["dashboard"] is None
+    assert messages[1]["dashboard"]["panels"][0]["points"] == [{"key": "0", "label": "월", "value": 3.0}]
+
+
+def test_detail_skips_an_unreadable_dashboard_but_keeps_the_message(api):
+    client, db = api
+    conversation_id = ensure_conversation(None, db)
+    append_message(conversation_id, MessageRole.USER, "그래프", db)
+    db.add(
+        Message(
+            conversation_id=conversation_id,
+            role=MessageRole.ASSISTANT,
+            content="만들었습니다",
+            dashboard={"title": "형식이 바뀐 옛 행"},
+        )
+    )
+    db.commit()
+
+    response = client.get(f"/conversations/{conversation_id}")
+
+    assert response.status_code == 200
+    answer = response.json()["messages"][1]
+    assert answer["content"] == "만들었습니다"
+    assert answer["dashboard"] is None

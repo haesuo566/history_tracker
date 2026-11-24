@@ -11,10 +11,18 @@ from backend.db.session import get_db
 from backend.models.conversation import Conversation, Message
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-from backend.services import preprocess as preprocess_service
-from backend.services.intent import Intent
-from backend.services.query_parser import ParsedQuery
-from backend.services.timerange import TimeRange, TimeRangeKind
+from backend.schemas.dashboard import (
+    ChartType,
+    Dashboard,
+    DashboardPanel,
+    DashboardPoint,
+)
+from backend.services.chat import preprocess as preprocess_service
+from backend.services.chat.intent import Intent
+from backend.services.chat.query_parser import ParsedQuery
+from backend.services.chat.timerange import TimeRange, TimeRangeKind
+from backend.services.dashboard.builder import DashboardOutcome
+from backend.services.dashboard.semantic_layer import DimensionName, MeasureName
 
 DOCUMENT_ID = "doc-kimchi"
 OTHER_DOCUMENT_ID = "doc-doenjang"
@@ -25,6 +33,23 @@ CLIENT_NOW = "2026-08-31T12:00:00+09:00"
 # detail 답변이 카드용 발췌(as_chat_result 의 앞 300자)가 아니라 본문을 근거로 받는지 가리려면
 # 본문이 그보다 길어야 한다.
 FULL_TEXT = "돼지고기와 신김치를 볶다가 물을 붓는다. " * 20
+
+DASHBOARD = Dashboard(
+    title="사이트별 본 페이지",
+    period="어제(8월 30일)",
+    panels=[
+        DashboardPanel(
+            title="사이트별 본 페이지 수",
+            chart=ChartType.BAR,
+            measure=MeasureName.PAGE_COUNT,
+            measure_label="본 페이지 수",
+            unit="개",
+            dimension=DimensionName.SITE,
+            dimension_label="사이트",
+            points=[DashboardPoint(key="blog.example.com", label="blog.example.com", value=2)],
+        )
+    ],
+)
 
 
 @pytest.fixture
@@ -52,7 +77,15 @@ def chat(monkeypatch):
         ]
         # 실제 재작성도 의도·검색어·기간·개수를 한 번에 돌려준다. 여기서는 입력에 섞인 '잡담'/'상세'로
         # 의도를 정한다 — 의도 판정 규칙 자체는 test_preprocess.py가 본다.
-        intent = Intent.ETC if "잡담" in message else Intent.DETAIL if "상세" in message else Intent.RECALL
+        intent = (
+            Intent.ETC
+            if "잡담" in message
+            else Intent.DETAIL
+            if "상세" in message
+            else Intent.DASHBOARD
+            if "그래프" in message
+            else Intent.RECALL
+        )
         return ParsedQuery(
             intent=intent,
             target_index=1 if intent is Intent.DETAIL else None,
@@ -119,7 +152,15 @@ def chat(monkeypatch):
         record_answer_context(history, shown)
         return f"{message}에 대한 잡담 답변"
 
+    def fake_build_dashboard(message, db, history=(), shown=None, window=None, client_now=None):
+        seen["dashboard_period"] = window.label if window else None
+        record_answer_context(history, shown)
+        if "체류" in message:
+            return DashboardOutcome(answer="만들 수 없습니다")
+        return DashboardOutcome(answer="대시보드를 만들었습니다", dashboard=DASHBOARD)
+
     monkeypatch.setattr(preprocess_service, "rewrite_query", fake_rewrite_query)
+    monkeypatch.setattr(chat_route, "build_dashboard", fake_build_dashboard)
     monkeypatch.setattr(chat_route, "search_history", fake_search_history)
     monkeypatch.setattr(chat_route, "list_recent", fake_list_recent)
     monkeypatch.setattr(chat_route, "generate_recall_answer", fake_generate_recall_answer)
@@ -441,3 +482,45 @@ def test_detail_without_a_previous_result_list_falls_back_to_search(chat):
 
     assert seen["candidates"] == []
     assert seen["query"] == "그거 상세 내용 알려줘(재작성)"
+
+
+def test_dashboard_turn_returns_and_stores_the_dashboard(chat):
+    client, db, seen = chat
+
+    body = post(client, "어제 사이트별 그래프")
+
+    assert body["dashboard"]["title"] == "사이트별 본 페이지"
+    assert body["results"] == []
+    assert body["answer"] == "대시보드를 만들었습니다"
+    assert seen["dashboard_period"] == "어제(8월 30일)"
+    assert "query" not in seen  # 기록을 찾지 않고 센다
+    [_question, answer] = messages_of(db, body["conversation_id"])
+    assert answer.dashboard["panels"][0]["points"][0]["value"] == 2
+
+
+def test_dashboard_turn_does_not_replace_the_candidate_list(chat):
+    """대시보드는 결과 카드를 보여주지 않는다. 그 턴이 목록을 비우면 다음 '두 번째 것'이 막힌다."""
+    client, db, seen = chat
+    conversation_id = post(client, "요리 블로그 찾아줘")["conversation_id"]
+
+    post(client, "사이트별 그래프", conversation_id)
+    post(client, "그거 상세 내용 알려줘", conversation_id)
+
+    assert seen["candidates"] == [DOCUMENT_ID, OTHER_DOCUMENT_ID]
+    assert results_of(db, conversation_id)[3] is None
+
+
+def test_refused_dashboard_answers_without_a_dashboard(chat):
+    client, db, _seen = chat
+
+    body = post(client, "사이트별 체류시간 그래프")
+
+    assert body["dashboard"] is None
+    assert body["answer"] == "만들 수 없습니다"
+    assert messages_of(db, body["conversation_id"])[1].dashboard is None
+
+
+def test_other_turns_carry_no_dashboard(chat):
+    client, _db, _seen = chat
+
+    assert post(client, "요리 블로그 찾아줘")["dashboard"] is None

@@ -7,8 +7,8 @@ from backend.core.config import settings
 from backend.core.model_catalog import EmbeddingProvider, chunk_chars_for
 from backend.db.base import Base
 from backend.models.app_setting import AppSetting
-from backend.services import gemini as gemini_service
 from backend.services import runtime_settings as runtime_settings_module
+from backend.services.llm import gemini as gemini_service
 from backend.services.runtime_settings import (
     LEGACY_CHUNK_CHARS,
     RuntimeSettings,

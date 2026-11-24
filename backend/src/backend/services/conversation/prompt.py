@@ -36,7 +36,7 @@ def render_history(
 
     shown(메시지 id -> 그 턴이 보여준 문서)이 주어지면 해당 발화 뒤에 그 목록을 덧붙인다.
     messages.content에는 답변 문장만 남아 어떤 URL을 보여줬는지가 대화 기록만으로는 되살아나지
-    않기 때문이다(services/results.py). 별개의 발화로 끼우지 않고 발화 안에 붙이는 것은 user/model
+    않기 때문이다(services/conversation/results.py). 별개의 발화로 끼우지 않고 발화 안에 붙이는 것은 user/model
     교대를 깨지 않기 위해서다 — 사이에 user 발화를 넣으면 그 턴 구조가 무너진다.
     """
     spoken = (past for past in history if past.content)

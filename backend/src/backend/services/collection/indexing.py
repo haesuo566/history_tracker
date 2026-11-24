@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 from backend.models.chunk import Chunk
 from backend.models.document import Document
 from backend.schemas.batch import BatchResponse
-from backend.services.chunking import chunk_text
-from backend.services.embedding import embed_texts
+from backend.services.collection.chunking import chunk_text
+from backend.services.llm.embedding import embed_texts
 from backend.services.runtime_settings import get_settings
 
 INSERT_VEC_CHUNK = text(

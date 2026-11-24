@@ -20,8 +20,8 @@ class MessageRole(StrEnum):
 class Conversation(Base):
     """이어지는 대화 한 세션. 실제 내용은 Message에 있고 여기엔 세션 식별자만 둔다.
 
-    title은 첫 user 메시지가 저장되는 시점에 한 번 채워지고(services.conversation.append_message),
-    이후 사용자가 PATCH /conversations/{id}(services.conversation.rename_conversation)로 직접
+    title은 첫 user 메시지가 저장되는 시점에 한 번 채워지고(services.conversation.store.append_message),
+    이후 사용자가 PATCH /conversations/{id}(services.conversation.store.rename_conversation)로 직접
     바꿀 수도 있다. TITLE_MAX_CHARS자로 자르고 말줄임표(1자)를 붙이므로 컬럼 길이는 +1.
     """
 
@@ -49,4 +49,8 @@ class Message(Base):
     # 지목하는 detail 턴은 목록 자체가 있어야 풀리는데, content에는 답변 문장만 남아 제목이 실리지
     # 않은 턴은 되짚을 수 없다. 결과가 없던 턴은 NULL이라 '결과가 있던 마지막 턴'을 그대로 고른다.
     result_document_ids: Mapped[list[str] | None] = mapped_column(JSON, default=None)
+    # 대시보드 턴이 보여준 대시보드(schemas.dashboard.Dashboard)를 데이터째 남긴다. 결과 목록과 달리
+    # 구성만 남겨 다시 실행하지 않는 것은, 그사이 기록이 더 쌓이면 '이번 주' 같은 대시보드의 숫자가
+    # 그때 보여준 것과 달라지기 때문이다. 대시보드가 아닌 턴은 NULL이다.
+    dashboard: Mapped[dict | None] = mapped_column(JSON, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

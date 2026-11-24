@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 from backend.db.base import Base
 from backend.models.conversation import Conversation, Message, MessageRole
 from backend.models.document import Document
-from backend.services.conversation import (
+from backend.services.conversation.results import latest_shown, load_shown_documents, past_shown
+from backend.services.conversation.store import (
     append_message,
     ensure_conversation,
     load_all_messages,
 )
-from backend.services.results import latest_shown, load_shown_documents, past_shown
 
 KIMCHI = ("doc-kimchi", "김치찌개 레시피", "https://blog.example.com/kimchi")
 DOENJANG = ("doc-doenjang", "된장찌개 끓이는 법", "https://recipe.example.com/doenjang")

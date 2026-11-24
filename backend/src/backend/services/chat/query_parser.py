@@ -7,11 +7,11 @@ from pydantic import BaseModel
 
 from backend.models.conversation import Message
 from backend.models.document import Document
-from backend.services.gemini import get_client
-from backend.services.intent import Intent
-from backend.services.prompt import format_listing, render_history
+from backend.services.chat.intent import Intent
+from backend.services.chat.timerange import TimeRange, local_now
+from backend.services.conversation.prompt import format_listing, render_history
+from backend.services.llm.gemini import get_client
 from backend.services.runtime_settings import get_settings
-from backend.services.timerange import TimeRange, local_now
 
 
 class ParsedQuery(BaseModel):
@@ -41,6 +41,10 @@ SYSTEM_INSTRUCTION = (
     "'두 번째 것 자세히', '첫 번째 링크 내용이 뭐였지', '거기 가격 얼마였어'처럼 지목한 대상이 앞선 "
     "대화의 결과 목록 안에 있어야 detail이다. 앞선 대화에 결과가 없거나 기록을 새로 뒤져야 하면 "
     "detail이 아니라 recall이다. "
+    "dashboard: 기록을 하나하나 찾는 것이 아니라 모아서 세거나 그래프·차트·대시보드·통계로 보여달라는 "
+    "의도. '이번 달 사이트별로 몇 개 봤어', '요일별 추이 그래프', '지난주에 리액트 글 몇 개 읽었지'처럼 "
+    "답이 페이지 목록이 아니라 숫자나 그래프인 질의다. 앞서 만든 대시보드를 '주별로 바꿔줘'처럼 "
+    "고치라는 요청도 dashboard다. 차트나 그래프를 다룬 글을 찾는 것('d3 차트 글 찾아줘')은 recall이다. "
     "etc: 그 외 잡담이나 무관한 질문. "
     "번호가 붙은 결과 목록이 함께 주어지면 detail 판단의 근거는 그 목록이다. intent가 detail이면 "
     "사용자가 지목한 항목의 번호를 target_index에 담아라. 순서('두 번째'), 제목의 일부, 사이트 "
@@ -66,7 +70,9 @@ SYSTEM_INSTRUCTION = (
     "'그거', '아까 그 사이트', '두 번째 것'처럼 앞선 대화를 가리키는 표현은 대화에서 그 대상을 찾아 "
     "구체적인 명사나 제목으로 바꿔라. 가리키는 대상을 찾을 수 없으면 그 표현은 버려라. "
     "intent가 detail이면 query에는 지목된 그 결과 하나를 특정할 수 있는 제목이나 키워드만 담아라. "
-    "intent가 etc이면 query는 쓰이지 않으므로 마지막 사용자 메시지를 그대로 담아도 된다. "
+    "intent가 etc나 dashboard이면 query는 쓰이지 않으므로 마지막 사용자 메시지를 그대로 담아도 된다. "
+    "dashboard도 time_range는 똑같이 채워라 — 대시보드가 볼 기간이다. 앞서 만든 대시보드를 고치라는 "
+    "요청이 기간을 새로 말하지 않았으면 그 대시보드의 기간을 그대로 담아라. "
     "desired_count 필드에는 사용자가 '3개만', '다섯 개 찾아줘'처럼 결과 개수를 명시적으로 요청한 경우 "
     "그 숫자를 정수로, 그렇지 않으면 null을 담아라."
 )
@@ -79,7 +85,7 @@ def _system_instruction(client_now: datetime | None) -> str:
 
     '8월 20일에 본 거'가 몇 년의 8월 20일인지, '지난달'이 몇 월인지는 오늘을 알아야 정해진다.
     모델은 자기가 언제 불렸는지 모르므로 여기서 알려준다. 라벨(yesterday 등)의 실제 구간 계산은
-    services/timerange.py가 하지만, absolute로 말한 날짜만은 모델이 적어야 해서 필요하다.
+    services/chat/timerange.py가 하지만, absolute로 말한 날짜만은 모델이 적어야 해서 필요하다.
 
     날짜는 사용자의 로컬 기준이다. UTC로 알려주면 밤늦은 질의에서 하루가 어긋난다.
     """
@@ -93,7 +99,7 @@ def _build_contents(
     candidates: Sequence[Document] = (),
     shown: Mapping[int, Sequence[Document]] = {},
 ) -> list[types.Content]:
-    """앞선 대화를 옮기고(services/prompt.py) 후보 목록과 이번 입력을 뒤에 붙인다.
+    """앞선 대화를 옮기고(services/conversation/prompt.py) 후보 목록과 이번 입력을 뒤에 붙인다.
 
     후보 목록은 이번 입력 바로 앞에 번호를 붙여 끼운다. 목록을 따로 보여줘야 판단과 번호 지목이
     같은 것을 보고 이뤄진다. 별개의 발화로 두는 것은 '판단 대상은 마지막 사용자 메시지'라는 지시를

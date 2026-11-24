@@ -86,13 +86,13 @@ export async function POST(request: NextRequest): Promise<Response> {
   }
 
   try {
-    const { conversationId, results, answer } = await searchHistory(
+    const { conversationId, results, answer, dashboard } = await searchHistory(
       parsed.message,
       parsed.conversationId,
       parsed.clientNow,
       request.signal,
     );
-    const payload: ChatResponseBody = { conversation_id: conversationId, results, answer };
+    const payload: ChatResponseBody = { conversation_id: conversationId, results, answer, dashboard };
     return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     // 사용자가 탭을 닫거나 중단한 경우. 보낼 곳이 없으므로 조용히 끝낸다.

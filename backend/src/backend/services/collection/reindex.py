@@ -16,7 +16,7 @@ from backend.db.init_db import CHUNK_FTS_DDL, vec_chunks_ddl
 from backend.models.chunk import Chunk
 from backend.models.document import Document
 from backend.schemas.reindex import ReindexResponse
-from backend.services.embedding import detect_chunk_chars, detect_dim
+from backend.services.llm.embedding import detect_chunk_chars, detect_dim
 from backend.services.runtime_settings import get_settings, save_index_state
 
 

@@ -8,10 +8,10 @@ from backend.core.config import settings
 from backend.models.conversation import Message
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-from backend.services.gemini import get_client
-from backend.services.prompt import render_history
+from backend.services.chat.timerange import TimeWindow, to_local
+from backend.services.conversation.prompt import render_history
+from backend.services.llm.gemini import get_client
 from backend.services.runtime_settings import get_settings
-from backend.services.timerange import TimeWindow, to_local
 
 # 세 프롬프트가 공유하는 규칙. 앞선 대화는 맥락으로만 쓰고 답변의 근거는 이번 턴에 주어진 것으로
 # 한정한다 — 이 문장이 없으면 지난 턴에 실린 목록을 이번 답변의 근거로 끌어다 쓴다.

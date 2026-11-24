@@ -2,7 +2,7 @@
 
 `/chat`으로 오간 대화를 나중에 찾아보거나 정리하기 위한 엔드포인트 3개.
 라우트는 `backend/src/backend/api/routes/conversation.py`, 실제 로직은
-`backend/src/backend/services/conversation.py`에 있다.
+`backend/src/backend/services/conversation/store.py`에 있다.
 
 ## 개념
 
@@ -12,7 +12,7 @@
 | `messages` | 대화에 오간 메시지 한 건. `role`(`user`/`assistant`), `content`, `created_at`, 그리고 그 턴이 보여준 결과의 `result_document_ids`. 순서는 `created_at`이 아니라 내부 `id`로 판단한다(초 단위라 같은 요청의 user/assistant가 같은 값을 가질 수 있어서) |
 
 **`title`은 사용자가 정하는 값이 아니다.** 그 대화의 **첫 `user` 메시지**가 저장되는 시점에
-한 번만 자동으로 채워지고(`services/conversation.py`의 `append_message`), 이후 메시지가 더
+한 번만 자동으로 채워지고(`services/conversation/store.py`의 `append_message`), 이후 메시지가 더
 쌓여도 바뀌지 않는다. 매 목록 조회마다 메시지를 다시 훑지 않기 위한 캐시 값이라 이렇게
 설계했다. 규칙:
 
@@ -111,7 +111,8 @@
       "role": "user",
       "content": "어제 본 리액트 상태관리 글 찾아줘",
       "created_at": "2026-08-04T14:01:53",
-      "results": []
+      "results": [],
+      "dashboard": null
     },
     {
       "role": "assistant",
@@ -123,7 +124,8 @@
           "title": "리액트 상태관리 비교",
           "url": "https://example.com/react-state"
         }
-      ]
+      ],
+      "dashboard": null
     }
   ]
 }
@@ -131,14 +133,21 @@
 
 메시지가 없으면 `"messages": []`. 오래된 것부터 시간순.
 
+### `dashboard`
+
+대시보드 턴이 보여준 대시보드를 `messages.dashboard`에 저장해 둔 **그대로** 돌려준다(형태는
+`schemas/dashboard.py`의 `Dashboard`). `results`와 달리 다시 계산하지 않는다 — 그사이 기록이 쌓이면
+"이번 주" 대시보드의 숫자가 그때 보여준 것과 달라진다. 다른 턴과, 읽을 수 없는 옛 형식의 값은
+`null`이다([dashboard.md](dashboard.md)).
+
 ### `results`
 
 그 턴이 사용자에게 보여준 결과 목록을 **보여준 순서 그대로** 되살린 값이다. `content`에는 답변
 문장만 남으므로 이것이 없으면 화면에 결과 카드를 다시 그릴 수 없다.
 
 제목과 URL은 저장돼 있지 않다. `messages.result_document_ids`에 남은 `document_id`로 `documents`를
-조인해 매번 만든다(`services/results.py`의 `load_shown_documents`). 문서는 한 번 저장되면 제목도
-URL도 바뀌지 않으므로(`services/document.py`의 `on_conflict_do_nothing`) 지금 조인해도 그때 보여준
+조인해 매번 만든다(`services/conversation/results.py`의 `load_shown_documents`). 문서는 한 번 저장되면 제목도
+URL도 바뀌지 않으므로(`services/collection/document.py`의 `on_conflict_do_nothing`) 지금 조인해도 그때 보여준
 값과 같다 — 그래서 메시지에 복제해 두지 않는다.
 
 검색 당시의 점수와 발췌는 담기지 않는다. 저장되지 않았고 재현할 수도 없어서, 0.0이나 빈 문자열로

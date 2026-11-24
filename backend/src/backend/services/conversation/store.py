@@ -17,7 +17,8 @@ from backend.schemas.conversation import (
     ConversationResult,
     ConversationSummary,
 )
-from backend.services.results import load_shown_documents
+from backend.schemas.dashboard import Dashboard
+from backend.services.conversation.results import load_shown_documents
 
 
 def ensure_conversation(conversation_id: str | None, db: Session) -> str:
@@ -46,11 +47,14 @@ def append_message(
     content: str,
     db: Session,
     result_document_ids: list[str] | None = None,
+    dashboard: Dashboard | None = None,
 ) -> None:
     """대화에 메시지 한 건을 덧붙인다.
 
     result_document_ids는 그 턴이 사용자에게 보여준 결과 목록이다. 빈 목록은 NULL로 눕혀 저장한다
     — 뒤에서 '결과가 있던 마지막 턴'을 고를 때 결과 없는 턴이 걸리지 않게 하려는 것이다.
+    dashboard는 그 턴이 보여준 대시보드다. 다시 연 대화에 같은 차트를 그리고, '주별로 바꿔줘'
+    같은 다음 턴이 무엇을 바꿀지 알게 하는 데 쓰인다.
 
     role이 user이면 title도 함께 확정을 시도한다. title이 이미 있으면 WHERE 조건에 걸려 UPDATE가
     아무 일도 하지 않으므로, 여러 번 불려도 대화의 첫 user 메시지로만 채워진다.
@@ -61,6 +65,7 @@ def append_message(
             role=role,
             content=content,
             result_document_ids=result_document_ids or None,
+            dashboard=dashboard.model_dump(mode="json") if dashboard else None,
         )
     )
     if role == MessageRole.USER:
@@ -166,7 +171,7 @@ def load_conversation_detail(conversation_id: str, db: Session) -> ConversationD
     load_recent_messages와 달리 잘라내지 않는다. 대화를 화면에 되살리는 용도라 전부 필요하다.
 
     content에는 답변 문장만 남아 그것만으로는 결과 카드를 다시 그릴 수 없다. 그 턴이 보여준
-    document_id는 남아 있으므로 문서를 조인해 제목과 URL을 되살린다(services/results.py).
+    document_id는 남아 있으므로 문서를 조인해 제목과 URL을 되살린다(services/conversation/results.py).
     """
     conversation = load_conversation(conversation_id, db)
     if conversation is None:
@@ -192,10 +197,25 @@ def load_conversation_detail(conversation_id: str, db: Session) -> ConversationD
                     )
                     for document in shown.get(message.id, ())
                 ],
+                dashboard=_stored_dashboard(message),
             )
             for message in messages
         ],
     )
+
+
+def _stored_dashboard(message: Message) -> Dashboard | None:
+    """저장해 둔 대시보드를 되살린다. 읽을 수 없으면(형식이 바뀐 옛 행) 없는 것으로 친다.
+
+    대화 전체를 못 여는 것보다 그 차트 하나가 빠지는 쪽이 낫다. 답변 문장은 그대로 남는다.
+    """
+    if not message.dashboard:
+        return None
+    try:
+        return Dashboard.model_validate(message.dashboard)
+    except ValueError:
+        logger.warning("stored dashboard unreadable, omitting it: message_id={}", message.id)
+        return None
 
 
 def list_conversations(db: Session, limit: int) -> list[ConversationSummary]:

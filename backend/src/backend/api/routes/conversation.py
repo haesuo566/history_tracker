@@ -7,7 +7,7 @@ from backend.schemas.conversation import (
     ConversationListResponse,
     ConversationRenameRequest,
 )
-from backend.services.conversation import (
+from backend.services.conversation.store import (
     delete_conversation,
     list_conversations,
     load_conversation_detail,

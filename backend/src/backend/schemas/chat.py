@@ -2,6 +2,8 @@ from datetime import UTC, datetime
 
 from pydantic import BaseModel, field_validator
 
+from backend.schemas.dashboard import Dashboard
+
 
 class ChatRequest(BaseModel):
     """conversation_id를 넘기면 그 대화를 이어간다. 없으면 새 대화가 시작된다.
@@ -19,7 +21,7 @@ class ChatRequest(BaseModel):
 class ChatResult(BaseModel):
     """검색 결과 한 줄. visited_at은 이 페이지를 수집한 시각(documents.timestamp)이다.
 
-    같은 URL을 다시 방문해도 갱신되지 않으므로(services/document.py) 정확히는 '처음 본 때'다.
+    같은 URL을 다시 방문해도 갱신되지 않으므로(services/collection/document.py) 정확히는 '처음 본 때'다.
     """
 
     document_id: str
@@ -52,3 +54,5 @@ class ChatResponse(BaseModel):
     conversation_id: str
     results: list[ChatResult] = []
     answer: str | None = None
+    # 대시보드 턴에서만 채워진다. 만들 수 없다고 거절한 턴은 answer에 그 이유만 있고 이 값은 없다.
+    dashboard: Dashboard | None = None

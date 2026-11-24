@@ -3,8 +3,8 @@ import json
 import httpx
 import pytest
 
-from backend.services import tei
-from backend.services.tei import (
+from backend.services.llm import tei
+from backend.services.llm.tei import (
     MAX_BATCH_SIZE,
     TeiError,
     _endpoint,

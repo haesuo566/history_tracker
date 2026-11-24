@@ -10,7 +10,6 @@ import type {
   ConversationDetailBody,
   ConversationListBody,
   ErrorBody,
-  SearchResult,
 } from "@/lib/types";
 
 export type ChatStatus = "idle" | "loading";
@@ -52,7 +51,7 @@ function deriveTitle(text: string): string {
  * 백엔드에 저장된 과거 메시지를 화면 말풍선 형태로 바꾼다.
  * role 과 results 는 /api/conversations/{id} 단계(backend.ts)에서 이미 형태가 걸러졌다.
  */
-function toChatMessage(raw: { role: string; content: string; results: SearchResult[] }): ChatMessage {
+function toChatMessage(raw: ConversationDetailBody["messages"][number]): ChatMessage {
   return raw.role === "user"
     ? { id: createId(), role: "user", content: raw.content }
     : {
@@ -60,6 +59,7 @@ function toChatMessage(raw: { role: string; content: string; results: SearchResu
         role: "assistant",
         results: raw.results,
         answer: raw.content.length > 0 ? raw.content : null,
+        dashboard: raw.dashboard,
       };
 }
 
@@ -283,7 +283,7 @@ export function useChatSessions() {
         throw new Error(detail ?? `요청이 실패했습니다 (${response.status}).`);
       }
 
-      const { conversation_id, results, answer } = (await response.json()) as ChatResponseBody;
+      const { conversation_id, results, answer, dashboard } = (await response.json()) as ChatResponseBody;
 
       // 응답을 기다리는 사이 stop() 이나 삭제로 이 요청이 무효화됐으면 되살리지 않는다.
       if (abortsRef.current.get(sessionId) !== controller) return;
@@ -294,7 +294,10 @@ export function useChatSessions() {
           session.id === sessionId
             ? {
                 ...session,
-                messages: [...session.messages, { id: createId(), role: "assistant", results, answer }],
+                messages: [
+                  ...session.messages,
+                  { id: createId(), role: "assistant", results, answer, dashboard },
+                ],
               }
             : session,
         ),

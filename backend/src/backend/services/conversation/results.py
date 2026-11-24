@@ -5,7 +5,7 @@ messages.result_document_ids에는 보여준 document_id만 순서대로 남는�
 과거 맥락도 이 조인을 거쳐야 한다.
 
 결과를 메시지에 복제해 두지 않고 매번 되살리는 쪽을 택한 근거는 문서가 불변이라는 점이다.
-같은 URL을 다시 수집해도 무시하므로(services/document.py의 on_conflict_do_nothing) title도 url도
+같은 URL을 다시 수집해도 무시하므로(services/collection/document.py의 on_conflict_do_nothing) title도 url도
 처음 값 그대로다. 즉 지금 조인해도 그때 보여준 것과 같은 값이 나온다 — 스냅샷으로 복제해서
 지킬 것이 없다.
 """

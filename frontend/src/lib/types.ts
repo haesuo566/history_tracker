@@ -11,14 +11,60 @@ export interface SearchResult {
   visitedAt: string | null;
 }
 
+/** 패널 하나를 그리는 방식. 백엔드 ChartType 과 같은 값이다. */
+export type ChartType = "kpi" | "bar" | "line" | "pie" | "table";
+
+/**
+ * 차트의 점 하나. key 는 원래 값(날짜·요일 번호·도메인), label 은 화면에 적을 말이다.
+ * 요일 0 -> "월" 같은 변환은 백엔드가 끝내 두므로 화면은 label 만 쓴다.
+ */
+export interface DashboardPoint {
+  key: string;
+  label: string;
+  value: number;
+}
+
+/**
+ * 측정값 하나를 기준 하나로 나눈 패널. dimension 이 null 이면 숫자 하나(KPI)다.
+ * dimension 은 백엔드 DimensionName 이며, 축 방향(시간 축인지 범주인지)을 고르는 데 쓴다.
+ */
+export interface DashboardPanel {
+  title: string;
+  chart: ChartType;
+  measureLabel: string;
+  unit: string;
+  dimension: string | null;
+  dimensionLabel: string | null;
+  points: DashboardPoint[];
+}
+
+/**
+ * 백엔드가 집계까지 끝낸 대시보드. period·filters 는 사람 말로 적힌 조건이고, notes 는 숫자를
+ * 읽을 때 알아야 할 단서다(같은 페이지를 다시 본 것은 세지 않는다 등).
+ */
+export interface Dashboard {
+  title: string;
+  period: string;
+  filters: string[];
+  panels: DashboardPanel[];
+  notes: string[];
+}
+
 /**
  * assistant 응답은 recall 의도면 검색된 기록 목록(results), 그 외 의도면 자유 텍스트(answer)다.
  * 두 필드는 서로 독립적이라 동시에 존재할 수도 있으므로 있는 것을 모두 보여준다.
  * 둘 다 비어 있으면(results 빈 배열 + answer null) 못 찾은 것으로 취급한다.
+ * dashboard 는 대시보드 턴에서만 있다. 만들 수 없다고 거절한 턴은 answer 에 이유만 담겨 온다.
  */
 export type ChatMessage =
   | { id: string; role: "user"; content: string }
-  | { id: string; role: "assistant"; results: SearchResult[]; answer: string | null };
+  | {
+      id: string;
+      role: "assistant";
+      results: SearchResult[];
+      answer: string | null;
+      dashboard: Dashboard | null;
+    };
 
 /**
  * POST /api/chat 요청 본문.
@@ -41,6 +87,7 @@ export interface ChatResponseBody {
   conversation_id: string;
   results: SearchResult[];
   answer: string | null;
+  dashboard: Dashboard | null;
 }
 
 /** 라우트 핸들러가 실패했을 때의 공통 응답 본문 */
@@ -75,7 +122,7 @@ export interface ConversationListBody {
  */
 export interface ConversationDetailBody {
   conversation_id: string;
-  messages: { role: string; content: string; results: SearchResult[] }[];
+  messages: { role: string; content: string; results: SearchResult[]; dashboard: Dashboard | null }[];
 }
 
 /** 설정 화면의 모델 선택지 한 줄. 임베딩 제공자 선택지도 같은 형태다. */

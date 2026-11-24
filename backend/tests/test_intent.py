@@ -1,6 +1,6 @@
 import pytest
 
-from backend.services.intent import Intent, classify_by_regex
+from backend.services.chat.intent import Intent, classify_by_regex
 
 
 @pytest.mark.parametrize(
@@ -39,3 +39,34 @@ def test_classify_by_regex_ambiguous_falls_through(message):
 def test_classify_by_regex_empty_message():
     assert classify_by_regex("") == Intent.ETC
     assert classify_by_regex("   ") == Intent.ETC
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "이번 달 사이트별로 본 페이지 그래프",
+        "요일별 추이 보여줘",
+        "지난주에 몇 개 봤어",
+        "대쉬보드 만들어줘",
+        "시간대별 통계",
+    ],
+)
+def test_classify_by_regex_dashboard(message):
+    assert classify_by_regex(message) == Intent.DASHBOARD
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # 차트를 다룬 글을 찾는 것인지, 기록을 차트로 그려 달라는 것인지는 문장을 읽어야 갈린다.
+        "어제 본 차트 라이브러리 글 찾아줘",
+        "방문 기록 통계 보여줘",
+    ],
+)
+def test_classify_by_regex_dashboard_and_recall_words_together_fall_through(message):
+    assert classify_by_regex(message) is None
+
+
+def test_pointing_at_the_nth_result_is_not_a_count():
+    """'몇 번째'는 지목이지 개수를 묻는 말이 아니다."""
+    assert classify_by_regex("몇 번째 거였지") is None

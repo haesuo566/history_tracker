@@ -9,11 +9,11 @@ from backend.core.config import settings
 from backend.models.chunk import Chunk
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-from backend.services.detail import SNIPPET_CHARS
-from backend.services.embedding import embed_query
+from backend.services.chat.detail import SNIPPET_CHARS
+from backend.services.chat.timerange import TimeWindow
+from backend.services.llm.embedding import embed_query
 from backend.services.runtime_settings import get_settings
-from backend.services.timerange import TimeWindow
-from backend.services.tokenizer import extract_nouns
+from backend.services.search.tokenizer import extract_nouns
 
 RRF_K = 60
 MAX_COSINE_DISTANCE = 1 - settings.min_cosine_similarity
@@ -212,7 +212,7 @@ def search_history(
 ) -> list[ChatResult]:
     """query와 가장 유사한 검색 기록(문서)을 벡터/FTS 검색 후 RRF로 병합해 상위 count개 문서를 반환한다.
 
-    query는 전처리(services/preprocess.py)에서 지시 표현까지 풀어낸 검색어를 그대로 받는다.
+    query는 전처리(services/chat/preprocess.py)에서 지시 표현까지 풀어낸 검색어를 그대로 받는다.
     count도 같은 단계에서 넘어온 사용자가 요청한 결과 개수이며, 없거나 0 이하면 기본값을 쓴다.
     window가 있으면 그 기간에 수집된 문서만 대상으로 한다.
 

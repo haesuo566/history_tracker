@@ -19,6 +19,47 @@
   }
 }
 
+/*
+ * 대시보드 차트의 색. 차트 본문은 hex 대신 이 역할 이름만 쓴다.
+ * 범주 색(--viz-series-*)은 순서 자체가 색약 구분을 지키는 장치라 순서대로만 쓰고 돌려 쓰지 않는다.
+ * 다크 값은 같은 색상을 어두운 면에 맞춰 다시 고른 것이지 자동 반전이 아니다.
+ */
+:root {
+  --viz-surface: #fcfcfb;
+  --viz-ink: #0b0b0b;
+  --viz-ink-2: #52514e;
+  --viz-muted: #898781;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  --viz-others: #b5b3ab;
+  --viz-series-1: #2a78d6;
+  --viz-series-2: #eb6834;
+  --viz-series-3: #1baf7a;
+  --viz-series-4: #eda100;
+  --viz-series-5: #e87ba4;
+  --viz-series-6: #008300;
+  --viz-series-7: #4a3aa7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --viz-surface: #1a1a19;
+    --viz-ink: #ffffff;
+    --viz-ink-2: #c3c2b7;
+    --viz-muted: #898781;
+    --viz-grid: #2c2c2a;
+    --viz-axis: #383835;
+    --viz-others: #5c5b56;
+    --viz-series-1: #3987e5;
+    --viz-series-2: #d95926;
+    --viz-series-3: #199e70;
+    --viz-series-4: #c98500;
+    --viz-series-5: #d55181;
+    --viz-series-6: #008300;
+    --viz-series-7: #9085e9;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);

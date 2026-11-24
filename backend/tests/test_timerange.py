@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend.services.timerange import (
+from backend.services.chat.timerange import (
     MAX_RECENT_DAYS,
     TimeRange,
     TimeRangeKind,

@@ -10,9 +10,9 @@ from backend.core.model_catalog import (
     FALLBACK_MAX_INPUT_TOKENS,
     chunk_chars_for,
 )
-from backend.services import embedding as embedding_service
-from backend.services import tei
-from backend.services.chunking import chunk_text
+from backend.services.collection.chunking import chunk_text
+from backend.services.llm import embedding as embedding_service
+from backend.services.llm import tei
 from tests.test_runtime_settings import runtime_settings
 
 

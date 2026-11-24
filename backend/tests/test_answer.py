@@ -4,8 +4,8 @@ import pytest
 
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-from backend.services import answer as answer_service
-from backend.services.answer import _build_detail_prompt, _result_line, generate_detail_answer
+from backend.services.chat import answer as answer_service
+from backend.services.chat.answer import _build_detail_prompt, _result_line, generate_detail_answer
 
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=KST)

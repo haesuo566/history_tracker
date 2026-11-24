@@ -6,7 +6,7 @@
 
 기준 시각은 사용자의 로컬 시각이다(chat 요청의 client_now). "어제"의 경계는 브라우저 앞에 앉은
 사람의 자정이지 서버나 UTC 의 자정이 아니다. 반대로 비교 대상인 documents.timestamp 는 확장이
-보낸 UTC 를 tzinfo 없이 저장한 값이라(services/document.py), 여기서 돌려주는 구간도 naive UTC 로
+보낸 UTC 를 tzinfo 없이 저장한 값이라(services/collection/document.py), 여기서 돌려주는 구간도 naive UTC 로
 맞춰 둔다. 한쪽만 aware 면 SQLAlchemy 비교에서 조용히 어긋난다.
 """
 
@@ -82,11 +82,11 @@ def local_now(client_now: datetime | None) -> datetime:
     """기준이 될 사용자 현재 시각. 없거나 tzinfo가 없으면 UTC로 본다.
 
     클라이언트가 시각을 싣지 못한 요청에서도 기간 검색이 완전히 멈추지는 않게 하려는 폴백이다.
-    한국에서 쓰면 자정 전후 아홉 시간이 어긋나므로, 부르는 쪽(services/preprocess.py)이 경고를
+    한국에서 쓰면 자정 전후 아홉 시간이 어긋나므로, 부르는 쪽(services/chat/preprocess.py)이 경고를
     남긴다.
 
     재작성 호출도 이 값을 쓴다. "8월 20일에 본 거"의 연도를 정하려면 모델이 오늘이 며칠인지
-    알아야 한다(services/query_parser.py).
+    알아야 한다(services/chat/query_parser.py).
     """
     if client_now is None:
         return datetime.now(UTC)

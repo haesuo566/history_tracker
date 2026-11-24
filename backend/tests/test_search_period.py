@@ -11,14 +11,14 @@ from backend.db.base import Base
 from backend.db.init_db import CHUNK_FTS_DDL
 from backend.models.chunk import Chunk
 from backend.models.document import Document
-from backend.services import search as search_service
-from backend.services.search import _fts_search, list_recent, search_history
-from backend.services.timerange import TimeRange, TimeRangeKind, resolve
+from backend.services.chat.timerange import TimeRange, TimeRangeKind, resolve
+from backend.services.search import hybrid as search_service
+from backend.services.search.hybrid import _fts_search, list_recent, search_history
 
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=KST)
 
-# documents.timestamp 는 오프셋 없는 UTC 로 저장된다(services/document.py).
+# documents.timestamp 는 오프셋 없는 UTC 로 저장된다(services/collection/document.py).
 TODAY = datetime(2026, 8, 31, 3, 0)  # 8/31 12:00 KST
 YESTERDAY = datetime(2026, 8, 29, 20, 0)  # 8/30 05:00 KST
 LAST_MONTH = datetime(2026, 7, 10, 1, 0)

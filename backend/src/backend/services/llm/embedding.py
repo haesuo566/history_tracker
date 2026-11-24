@@ -1,6 +1,6 @@
 """색인·검색에 쓰는 임베딩. 어느 제공자를 쓰는지는 설정이 정한다.
 
-이 모듈 밖(services.indexing, services.search)은 embed_texts / embed_query 두 함수만 알고,
+이 모듈 밖(services.collection.indexing, services.search.hybrid)은 embed_texts / embed_query 두 함수만 알고,
 제공자가 Gemini인지 TEI인지는 모른다.
 """
 
@@ -14,8 +14,8 @@ from backend.core.model_catalog import (
     chunk_chars_for,
     find_embedding_model,
 )
-from backend.services import tei
-from backend.services.gemini import get_client
+from backend.services.llm import tei
+from backend.services.llm.gemini import get_client
 from backend.services.runtime_settings import RuntimeSettings, get_settings
 
 # 차원을 알아내려고 보내는 문장. 내용은 상관없지만 빈 문자열은 모델이 거부할 수 있다.
@@ -47,7 +47,7 @@ def embed_query(text: str) -> list[float]:
     """검색 질의문을 임베딩해 벡터를 돌려준다.
 
     Gemini는 문서와 질의를 다른 task_type으로 임베딩한다. TEI에는 그런 구분이 없어 문서와 같은
-    방식으로 보낸다(services.tei 주석 참고).
+    방식으로 보낸다(services.llm.tei 주석 참고).
     """
     current = get_settings()
     if current.embedding_provider is EmbeddingProvider.TEI:

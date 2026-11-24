@@ -7,12 +7,12 @@ from sqlalchemy.orm import Session
 from backend.db.base import Base
 from backend.models.conversation import Conversation, Message, MessageRole
 from backend.models.document import Document
-from backend.services import preprocess as preprocess_service
-from backend.services.conversation import append_message, ensure_conversation
-from backend.services.intent import Intent
-from backend.services.preprocess import preprocess_message
-from backend.services.query_parser import ParsedQuery
-from backend.services.timerange import TimeRange, TimeRangeKind
+from backend.services.chat import preprocess as preprocess_service
+from backend.services.chat.intent import Intent
+from backend.services.chat.preprocess import preprocess_message
+from backend.services.chat.query_parser import ParsedQuery
+from backend.services.chat.timerange import TimeRange, TimeRangeKind
+from backend.services.conversation.store import append_message, ensure_conversation
 
 KIMCHI = ("doc-kimchi", "김치찌개 레시피", "https://blog.example.com/kimchi-jjigae")
 DOENJANG = ("doc-doenjang", "된장찌개 끓이는 법", "https://recipe.example.com/doenjang")
@@ -280,3 +280,38 @@ def test_rewrite_sees_the_conversation_up_to_the_previous_turn(db, monkeypatch):
         ("user", "요리 블로그 찾아줘"),
         ("assistant", "'김치찌개 레시피' 페이지를 찾았어요"),
     ]
+
+
+def test_regex_dashboard_follows_a_recall_verdict(db, monkeypatch):
+    """'통계학 블로그 글'처럼 낱말만 겹친 것은 문장을 읽은 재작성이 가린다."""
+    stub_rewrite(monkeypatch, Intent.RECALL)
+
+    prepared = preprocess_message("통계학 블로그", None, db)
+
+    assert prepared.intent is Intent.RECALL
+
+
+def test_regex_dashboard_is_not_overturned_by_a_chitchat_verdict(db, monkeypatch):
+    stub_rewrite(monkeypatch, Intent.ETC)
+
+    prepared = preprocess_message("요일별 그래프", None, db)
+
+    assert prepared.intent is Intent.DASHBOARD
+
+
+def test_regex_recall_accepts_a_dashboard_verdict(db, monkeypatch):
+    stub_rewrite(monkeypatch, Intent.DASHBOARD)
+
+    prepared = preprocess_message("방문 기록을 한눈에 정리해줘", None, db)
+
+    assert prepared.intent is Intent.DASHBOARD
+
+
+def test_dashboard_keeps_the_stated_period(db, monkeypatch):
+    stub_rewrite(monkeypatch, Intent.DASHBOARD, time_range=TimeRange(kind=TimeRangeKind.YESTERDAY))
+
+    prepared = preprocess_message("어제 사이트별 그래프", None, db, client_now=NOW)
+
+    assert prepared.intent is Intent.DASHBOARD
+    assert prepared.window.label == "어제(8월 30일)"
+    assert prepared.target_document is None

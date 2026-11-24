@@ -38,7 +38,7 @@ SETTING_KEYS = frozenset(
 )
 
 # 색인이 어떤 임베딩으로 만들어졌는지 남겨 두는 자리. 설정이 아니라 상태이므로 설정 화면이
-# 직접 쓰지 않고 재색인(services.reindex)만 갱신한다.
+# 직접 쓰지 않고 재색인(services.collection.reindex)만 갱신한다.
 INDEXED_DIM = "indexed_embedding_dim"
 INDEXED_SIGNATURE = "indexed_embedding_signature"
 INDEXED_CHUNK_CHARS = "indexed_chunk_chars"
@@ -169,7 +169,7 @@ def _parse_int(value: str | None, fallback: int) -> int:
 def get_settings() -> RuntimeSettings:
     """지금 유효한 설정을 돌려준다. Gemini를 호출하는 서비스들이 모델명·API key를 여기서 읽는다.
 
-    db 세션을 받지 않는다. 호출하는 쪽(services.answer 등)이 세션을 들고 있지 않은데, 설정을 읽기
+    db 세션을 받지 않는다. 호출하는 쪽(services.chat.answer 등)이 세션을 들고 있지 않은데, 설정을 읽기
     위해 그 함수들에 db를 흘려보내면 서비스 시그니처가 전부 바뀐다.
     """
     global _cache

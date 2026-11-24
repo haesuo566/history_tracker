@@ -17,7 +17,7 @@ from loguru import logger
 
 from backend.models.document import Document
 from backend.schemas.chat import ChatResult
-from backend.services.tokenizer import extract_nouns
+from backend.services.search.tokenizer import extract_nouns
 
 # 1위 점수가 이 값에 못 미치면 후보 중 아무것도 지목되지 않은 것으로 본다.
 MIN_MATCH_SCORE = 0.4

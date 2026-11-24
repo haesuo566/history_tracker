@@ -4,12 +4,13 @@ from sqlalchemy.orm import Session
 from backend.db.session import get_db
 from backend.models.conversation import MessageRole
 from backend.schemas.chat import ChatRequest, ChatResponse
-from backend.services.answer import generate_answer, generate_detail_answer, generate_recall_answer
-from backend.services.conversation import append_message
-from backend.services.detail import as_chat_result
-from backend.services.intent import Intent
-from backend.services.preprocess import preprocess_message
-from backend.services.search import list_recent, search_history
+from backend.services.chat.answer import generate_answer, generate_detail_answer, generate_recall_answer
+from backend.services.chat.detail import as_chat_result
+from backend.services.chat.intent import Intent
+from backend.services.chat.preprocess import preprocess_message
+from backend.services.conversation.store import append_message
+from backend.services.dashboard.builder import build_dashboard
+from backend.services.search.hybrid import list_recent, search_history
 
 router = APIRouter(tags=["chat"])
 
@@ -21,7 +22,15 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
     # 답변은 재작성된 검색어가 아니라 원문을 근거로 만든다. 사용자가 실제로 물은 문장이다. 대신
     # 앞선 대화와 그 턴들이 보여준 목록을 함께 넘겨, '아까 그거'가 무엇인지 답변 단계도 알게 한다.
     context = (prepared.history, prepared.shown)
-    if prepared.intent == Intent.RECALL:
+    dashboard = None
+    if prepared.intent == Intent.DASHBOARD:
+        # 기록을 찾지 않고 센다. 결과 카드가 없으니 다음 턴의 지목 후보 목록도 바뀌지 않는다.
+        results = []
+        outcome = build_dashboard(
+            request.message, db, *context, window=prepared.window, client_now=request.client_now
+        )
+        answer, dashboard = outcome.answer, outcome.dashboard
+    elif prepared.intent == Intent.RECALL:
         # "어제 본 거 다 보여줘"에는 찾을 낱말이 없다. 그대로 검색을 태우면 명사가 없어 전문
         # 검색은 빈손이고 벡터 검색은 아무 문서나 끌어오므로, 기간만으로 늘어놓는다.
         if prepared.window is not None and not prepared.query.strip():
@@ -55,5 +64,8 @@ def chat(request: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
         answer,
         db,
         result_document_ids=shown_document_ids,
+        dashboard=dashboard,
     )
-    return ChatResponse(conversation_id=prepared.conversation_id, results=results, answer=answer)
+    return ChatResponse(
+        conversation_id=prepared.conversation_id, results=results, answer=answer, dashboard=dashboard
+    )

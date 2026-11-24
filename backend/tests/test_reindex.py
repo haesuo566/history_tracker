@@ -11,9 +11,9 @@ from backend.db.init_db import CHUNK_FTS_DDL, vec_chunks_ddl
 from backend.models.app_setting import AppSetting
 from backend.models.chunk import Chunk
 from backend.models.document import Document
-from backend.services import embedding as embedding_service
-from backend.services import reindex as reindex_service
-from backend.services.reindex import reset_index
+from backend.services.collection import reindex as reindex_service
+from backend.services.collection.reindex import reset_index
+from backend.services.llm import embedding as embedding_service
 from backend.services.runtime_settings import load_settings, reset_cache, save_settings
 
 INDEXED_DIM = 4

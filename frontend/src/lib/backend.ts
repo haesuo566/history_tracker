@@ -1,5 +1,9 @@
 import type {
   BatchSummary,
+  ChartType,
+  Dashboard,
+  DashboardPanel,
+  DashboardPoint,
   ModelOption,
   ReindexSummary,
   SearchResult,
@@ -138,10 +142,65 @@ function toSearchResults(value: unknown): SearchResult[] {
     .filter((result): result is SearchResult => result !== null);
 }
 
+const CHART_TYPES: readonly ChartType[] = ["kpi", "bar", "line", "pie", "table"];
+
+function toDashboardPoint(raw: unknown): DashboardPoint | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { key, label, value } = raw as Record<string, unknown>;
+  if (typeof key !== "string" || typeof label !== "string") return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return { key, label, value };
+}
+
+function toDashboardPanel(raw: unknown): DashboardPanel | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const {
+    title,
+    chart,
+    measure_label: measureLabel,
+    unit,
+    dimension,
+    dimension_label: dimensionLabel,
+    points,
+  } = raw as Record<string, unknown>;
+  if (typeof title !== "string" || typeof measureLabel !== "string" || typeof unit !== "string") {
+    return null;
+  }
+  if (!CHART_TYPES.includes(chart as ChartType) || !Array.isArray(points)) return null;
+  return {
+    title,
+    chart: chart as ChartType,
+    measureLabel,
+    unit,
+    dimension: typeof dimension === "string" ? dimension : null,
+    dimensionLabel: typeof dimensionLabel === "string" ? dimensionLabel : null,
+    points: points.map(toDashboardPoint).filter((point): point is DashboardPoint => point !== null),
+  };
+}
+
+/**
+ * 백엔드 Dashboard 를 형태만 확인해서 camelCase 로 옮긴다. 대시보드가 없는 턴은 null 이다.
+ * 패널 하나가 어긋났다고 대시보드 전체를 버리지는 않는다 — 그 패널만 빠진다. 그릴 패널이 하나도
+ * 남지 않으면 null 이라, 답변 문장만 보인다.
+ */
+function toDashboard(raw: unknown): Dashboard | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const { title, period, filters, panels, notes } = raw as Record<string, unknown>;
+  if (typeof title !== "string" || typeof period !== "string" || !Array.isArray(panels)) return null;
+
+  const usable = panels.map(toDashboardPanel).filter((panel): panel is DashboardPanel => panel !== null);
+  if (usable.length === 0) return null;
+
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return { title, period, filters: strings(filters), panels: usable, notes: strings(notes) };
+}
+
 export interface ChatReply {
   conversationId: string;
   results: SearchResult[];
   answer: string | null;
+  dashboard: Dashboard | null;
 }
 
 /**
@@ -167,6 +226,7 @@ export async function searchHistory(
     conversation_id: rawConversationId,
     results: rawResults,
     answer: rawAnswer,
+    dashboard: rawDashboard,
   } = payload as Record<string, unknown>;
 
   // id 를 못 받으면 다음 질문이 조용히 새 대화로 시작돼 맥락이 끊긴다. 조용히 넘기지 않는다.
@@ -178,7 +238,7 @@ export async function searchHistory(
 
   const answer = typeof rawAnswer === "string" && rawAnswer.length > 0 ? rawAnswer : null;
 
-  return { conversationId: rawConversationId, results, answer };
+  return { conversationId: rawConversationId, results, answer, dashboard: toDashboard(rawDashboard) };
 }
 
 function toCount(value: unknown): number | null {
@@ -238,13 +298,14 @@ export interface ConversationMessageItem {
   role: "user" | "assistant";
   content: string;
   results: SearchResult[];
+  dashboard: Dashboard | null;
 }
 
 function toConversationMessage(raw: Record<string, unknown>): ConversationMessageItem | null {
-  const { role, content, results } = raw;
+  const { role, content, results, dashboard } = raw;
   if (role !== "user" && role !== "assistant") return null;
   if (typeof content !== "string") return null;
-  return { role, content, results: toSearchResults(results) };
+  return { role, content, results: toSearchResults(results), dashboard: toDashboard(dashboard) };
 }
 
 /**

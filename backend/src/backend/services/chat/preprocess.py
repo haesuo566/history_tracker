@@ -7,17 +7,17 @@ from sqlalchemy.orm import Session
 
 from backend.models.conversation import Message, MessageRole
 from backend.models.document import Document
-from backend.services.conversation import (
+from backend.services.chat.detail import resolve_target
+from backend.services.chat.intent import Intent, classify_by_regex
+from backend.services.chat.query_parser import rewrite_query
+from backend.services.chat.timerange import TimeRangeKind, TimeWindow
+from backend.services.chat.timerange import resolve as resolve_time_range
+from backend.services.conversation.results import latest_shown, load_shown_documents, past_shown
+from backend.services.conversation.store import (
     append_message,
     ensure_conversation,
     load_recent_messages,
 )
-from backend.services.detail import resolve_target
-from backend.services.intent import Intent, classify_by_regex
-from backend.services.query_parser import rewrite_query
-from backend.services.results import latest_shown, load_shown_documents, past_shown
-from backend.services.timerange import TimeRangeKind, TimeWindow
-from backend.services.timerange import resolve as resolve_time_range
 
 
 @dataclass(frozen=True)
@@ -29,13 +29,14 @@ class PreprocessedMessage:
     'DETAIL인데 대상이 없는' 경우를 다룰 필요가 없다.
 
     history는 이번 입력 직전까지의 대화이고, shown은 그 안의 각 턴이 보여준 결과 목록이다
-    (메시지 id -> 문서, services/results.py). 답변 생성이 같은 맥락을 다시 조회하지 않도록 여기
+    (메시지 id -> 문서, services/conversation/results.py). 답변 생성이 같은 맥락을 다시 조회하지 않도록 여기
     실어 보낸다. shown에는 직전 턴도 그대로 들어 있다 — 재작성 호출에서만 그 턴을 빼고 넘긴다
     (후보 목록으로 이미 따로 실리기 때문이다).
 
-    window는 사용자가 말한 기간이다(services/timerange.py). 기간을 말하지 않았으면 None이고,
+    window는 사용자가 말한 기간이다(services/chat/timerange.py). 기간을 말하지 않았으면 None이고,
     그때는 기간 조건 없이 검색한다. DETAIL 경로에서는 desired_count와 마찬가지로 뜻이 없다 —
-    지목한 문서 한 건이 이미 정해져 있다.
+    지목한 문서 한 건이 이미 정해져 있다. DASHBOARD 경로에서는 대시보드가 집계할 기간이 되며,
+    query와 desired_count는 쓰이지 않는다(무엇을 셀지는 services/dashboard/planner.py가 정한다).
     """
 
     conversation_id: str
@@ -50,6 +51,10 @@ class PreprocessedMessage:
 
 def _settle_intent(by_regex: Intent | None, by_rewrite: Intent, has_candidates: bool) -> Intent:
     """정규식 판정과 재작성 판정을 합쳐 이 턴의 의도를 확정한다."""
+    if by_regex is Intent.DASHBOARD:
+        # '통계학 블로그 글'처럼 낱말만 겹친 질의가 있어, 문장을 읽은 재작성이 recall이라 하면 따른다.
+        # 그 밖의 판정으로는 뒤집지 않는다 — 그래프를 달라는데 말로만 답하게 된다.
+        return Intent.RECALL if by_rewrite is Intent.RECALL else Intent.DASHBOARD
     if by_rewrite is Intent.DETAIL and not has_candidates:
         # 지목할 결과가 아직 없는 턴은 상세 요청이 될 수 없다. 기록을 새로 뒤지는 쪽으로 내린다.
         logger.debug("detail needs a previous result list to point at, downgrading to recall")
@@ -57,7 +62,10 @@ def _settle_intent(by_regex: Intent | None, by_rewrite: Intent, has_candidates: 
     if by_regex is Intent.RECALL:
         # 정규식이 확신한 '기록 관련'은 잡담으로 뒤집지 않는다. 다만 recall/detail의 구분은 앞선
         # 대화를 봐야 갈리고 정규식은 애초에 그 둘을 가리지 못하므로, detail이라는 판정만은 받는다.
-        return Intent.DETAIL if by_rewrite is Intent.DETAIL else Intent.RECALL
+        # dashboard도 같다 — '방문 기록 통계'처럼 기록 낱말이 붙은 집계 질의가 있다.
+        if by_rewrite in (Intent.DETAIL, Intent.DASHBOARD):
+            return by_rewrite
+        return Intent.RECALL
     return by_rewrite
 
 
@@ -90,8 +98,8 @@ def preprocess_message(
     무엇을 검색할지를 정하는데, 둘은 한 번의 Gemini 호출로 함께 받는다. '그거 뭐였지'가 무엇을
     가리키는지 찾는 일과 이 턴이 recall인지 판단하는 일이 같은 추론이라서다. 그래서 의도 분류에도
     대화 맥락이 필요하며, 그 맥락을 들고 있는 곳이 바로 이 재작성 호출이다. detail 턴이 지목한
-    문서를 고르는 것도 같은 이유로 같은 호출에 얹는다(services/detail.py). 사용자가 말한 기간
-    역시 같은 호출이 라벨로 받아, 여기서 실제 구간으로 바꾼다(services/timerange.py).
+    문서를 고르는 것도 같은 이유로 같은 호출에 얹는다(services/chat/detail.py). 사용자가 말한 기간
+    역시 같은 호출이 라벨로 받아, 여기서 실제 구간으로 바꾼다(services/chat/timerange.py).
 
     두 판정을 합치는 규칙은 _settle_intent에 있다.
     """

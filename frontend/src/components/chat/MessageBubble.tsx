@@ -1,5 +1,6 @@
 "use client";
 
+import { DashboardView } from "@/components/dashboard/DashboardView";
 import { formatVisitedAt } from "@/lib/clock";
 import type { ChatMessage, SearchResult } from "@/lib/types";
 
@@ -7,8 +8,19 @@ interface MessageBubbleProps {
   message: ChatMessage;
 }
 
-/** 말풍선 껍데기. 아바타와 배경색만 담당해 실제/로딩 말풍선이 같은 모양을 갖게 한다. */
-function Bubble({ isUser, children }: { isUser: boolean; children: React.ReactNode }) {
+/**
+ * 말풍선 껍데기. 아바타와 배경색만 담당해 실제/로딩 말풍선이 같은 모양을 갖게 한다.
+ * wide 는 대시보드처럼 내용이 폭을 써야 하는 말풍선이다. 글자 길이에 맞춰 줄어들면 차트가 좁아진다.
+ */
+function Bubble({
+  isUser,
+  wide = false,
+  children,
+}: {
+  isUser: boolean;
+  wide?: boolean;
+  children: React.ReactNode;
+}) {
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}>
       <div
@@ -23,7 +35,7 @@ function Bubble({ isUser, children }: { isUser: boolean; children: React.ReactNo
       </div>
 
       <div
-        className={`min-w-0 max-w-[min(46rem,85%)] rounded-2xl px-4 py-3 text-[15px] leading-relaxed shadow-sm ${
+        className={`min-w-0 ${wide ? "w-full max-w-[46rem]" : "max-w-[min(46rem,85%)]"} rounded-2xl px-4 py-3 text-[15px] leading-relaxed shadow-sm ${
           isUser
             ? "rounded-tr-sm bg-gradient-to-br from-blue-600 to-indigo-600 text-white"
             : "rounded-tl-sm bg-white text-zinc-900 ring-1 ring-zinc-200/70 dark:bg-zinc-800/80 dark:text-zinc-100 dark:ring-zinc-700/60"
@@ -93,14 +105,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   const hasAnswer = message.answer !== null;
   const hasResults = message.results.length > 0;
+  const hasDashboard = message.dashboard !== null;
 
   return (
-    <Bubble isUser={false}>
+    <Bubble isUser={false} wide={hasDashboard}>
       <div className="space-y-3">
         {hasAnswer && <p className="whitespace-pre-wrap break-words">{message.answer}</p>}
+        {message.dashboard !== null && <DashboardView dashboard={message.dashboard} />}
         {hasResults ? (
           message.results.map((result) => <ResultCard key={result.url} result={result} />)
-        ) : !hasAnswer ? (
+        ) : !hasAnswer && !hasDashboard ? (
           <p className="text-zinc-500 dark:text-zinc-400">
             관련된 검색 기록을 찾지 못했습니다. 다른 표현으로 물어봐 주세요.
           </p>
