@@ -4,7 +4,9 @@ import { BackendError, searchHistory } from "@/lib/backend";
 import type { ChatResponseBody } from "@/lib/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// 생성 모델을 로컬 LLM 에 맡기면 한 질문에 수 분이 걸릴 수 있다(lib/backend.ts 의 SEARCH_TIMEOUT_MS).
+// 이 값은 정적으로 분석되므로 그 상수를 가져다 쓸 수 없다.
+export const maxDuration = 360;
 
 /** 백엔드로 넘기기 전에 잘라 낸다. 검색 질의로 이보다 길 이유가 없다. */
 const MAX_MESSAGE_LENGTH = 2_000;

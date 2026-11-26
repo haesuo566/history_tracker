@@ -74,10 +74,10 @@ def test_detail_prompt_carries_the_visit_date():
     assert "본 날짜: 2026년 8월 30일" in prompt
 
 
-def test_a_blank_body_answers_without_calling_gemini(monkeypatch):
+def test_a_blank_body_answers_without_calling_the_model(monkeypatch):
     """근거 없이 제목만 주면 내용을 지어낸다. 부르지 않는 것이 옳다."""
     monkeypatch.setattr(
-        answer_service, "get_client", lambda: pytest.fail("본문이 없는데 Gemini를 불렀다")
+        answer_service, "get_generator", lambda: pytest.fail("본문이 없는데 모델을 불렀다")
     )
 
     reply = generate_detail_answer("자세히 알려줘", document(""))

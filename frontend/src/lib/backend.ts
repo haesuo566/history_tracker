@@ -14,8 +14,12 @@ import type {
 /** FastAPI 백엔드 주소. 라우트 핸들러(서버)에서만 읽으므로 NEXT_PUBLIC_ 접두사가 필요 없다. */
 const BASE_URL = (process.env.BACKEND_URL ?? "http://127.0.0.1:8000").replace(/\/+$/, "");
 
-/** 쿼리 재작성 + 임베딩 + 검색이 순차로 일어나 수 초까지 걸릴 수 있다. */
-const SEARCH_TIMEOUT_MS = 30_000;
+/**
+ * 쿼리 재작성 + 임베딩 + 검색 + 답변 생성이 순차로 일어난다. Gemini 면 수 초지만, 생성 모델을
+ * 로컬 LLM 에 맡기면 호출 하나에 수십 초가 걸린다. 백엔드는 생성 호출 하나를 180초까지 기다리고
+ * 한 질문에 두 번 부르므로, 그보다 먼저 끊지 않게 잡는다.
+ */
+const SEARCH_TIMEOUT_MS = 6 * 60_000;
 
 /** 미처리 문서 전체를 청크로 나눠 임베딩하므로 분 단위로 걸릴 수 있다. */
 const BATCH_TIMEOUT_MS = 10 * 60_000;
@@ -25,6 +29,9 @@ const CONVERSATION_TIMEOUT_MS = 10_000;
 
 /** 설정 조회/저장도 DB만 건드린다. */
 const SETTINGS_TIMEOUT_MS = 10_000;
+
+/** 모델 목록 조회는 생성 모델 서버에 한 번 묻는다. 백엔드는 10초에 끊으므로 그보다 조금 길게 둔다. */
+const LLM_MODELS_TIMEOUT_MS = 15_000;
 
 /**
  * 재색인은 색인을 비우는 것까지만 하지만, 그 전에 임베딩 제공자를 한 번 불러 차원을 확인한다.
@@ -91,7 +98,7 @@ async function request(
     return null;
   }
   if (!response.ok) {
-    throw new BackendError(`백엔드가 오류를 반환했습니다 (${response.status}).`, response.status);
+    throw new BackendError(await errorMessage(response), response.status);
   }
   if (response.status === 204) {
     return undefined;
@@ -102,6 +109,23 @@ async function request(
   } catch {
     throw new BackendError("백엔드 응답을 해석할 수 없습니다.");
   }
+}
+
+/**
+ * 실패 응답을 사용자에게 보여줄 문구로 바꾼다.
+ *
+ * 502 는 백엔드가 그 뒤의 서버(생성 모델·TEI)에 붙지 못한 것이고, detail 에 무엇이 왜 실패했는지가
+ * 한국어로 담겨 온다. 상태 코드만 보여주면 사용자는 주소가 틀렸는지 모델이 꺼졌는지 알 수 없다.
+ * 다른 상태의 detail 은 개발용 문구(영문, 검증 오류 목록)라 그대로 보여주지 않는다.
+ */
+async function errorMessage(response: Response): Promise<string> {
+  const fallback = `백엔드가 오류를 반환했습니다 (${response.status}).`;
+  if (response.status !== 502) return fallback;
+  const detail = await response
+    .json()
+    .then((payload: unknown) => (payload as Record<string, unknown> | null)?.detail)
+    .catch(() => undefined);
+  return typeof detail === "string" && detail.length > 0 ? detail : fallback;
 }
 
 /**
@@ -375,11 +399,17 @@ function toSettings(payload: unknown): SettingsBody {
   const generationModels = toModelOptions(raw.generation_models);
   const embeddingModels = toModelOptions(raw.embedding_models);
   const providers = toModelOptions(raw.embedding_providers);
+  const generationProviders = toModelOptions(raw.generation_providers);
   const provider = raw.embedding_provider;
+  const generationProvider = raw.generation_provider;
 
   if (
-    typeof raw.answer_model !== "string" ||
-    typeof raw.query_rewrite_model !== "string" ||
+    (generationProvider !== "gemini" && generationProvider !== "openai_compat") ||
+    typeof raw.generation_model !== "string" ||
+    typeof raw.llm_base_url !== "string" ||
+    typeof raw.llm_model !== "string" ||
+    typeof raw.llm_api_key_configured !== "boolean" ||
+    typeof raw.llm_disable_thinking !== "boolean" ||
     typeof raw.embedding_model !== "string" ||
     (provider !== "gemini" && provider !== "tei") ||
     typeof raw.tei_base_url !== "string" ||
@@ -395,14 +425,21 @@ function toSettings(payload: unknown): SettingsBody {
     embeddingModels === null ||
     embeddingModels.length === 0 ||
     providers === null ||
-    providers.length === 0
+    providers.length === 0 ||
+    generationProviders === null ||
+    generationProviders.length === 0
   ) {
     throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
   }
 
   return {
-    answer_model: raw.answer_model,
-    query_rewrite_model: raw.query_rewrite_model,
+    generation_provider: generationProvider,
+    generation_model: raw.generation_model,
+    llm_base_url: raw.llm_base_url,
+    llm_model: raw.llm_model,
+    llm_api_key_configured: raw.llm_api_key_configured,
+    llm_api_key_hint: typeof raw.llm_api_key_hint === "string" ? raw.llm_api_key_hint : null,
+    llm_disable_thinking: raw.llm_disable_thinking,
     embedding_model: raw.embedding_model,
     embedding_provider: provider,
     tei_base_url: raw.tei_base_url,
@@ -416,6 +453,7 @@ function toSettings(payload: unknown): SettingsBody {
     vector_search_active: raw.vector_search_active,
     api_key_configured: raw.api_key_configured,
     api_key_hint: typeof raw.api_key_hint === "string" ? raw.api_key_hint : null,
+    generation_providers: generationProviders,
     embedding_providers: providers,
     generation_models: generationModels,
     embedding_models: embeddingModels,
@@ -447,6 +485,25 @@ export async function updateSettings(
     signal,
   });
   return toSettings(payload);
+}
+
+/**
+ * GET /settings/llm-models 로 OpenAI 호환 서버에 올라가 있는 모델 이름들을 받는다.
+ * baseUrl 을 넘기면 아직 저장하지 않은 주소로 묻는다 — 저장 전에 연결을 확인하는 용도다.
+ */
+export async function listLlmModels(baseUrl: string | null, signal?: AbortSignal): Promise<string[]> {
+  const query = baseUrl === null ? "" : `?${new URLSearchParams({ base_url: baseUrl })}`;
+  const payload = await request(`/settings/llm-models${query}`, {
+    method: "GET",
+    timeoutMs: LLM_MODELS_TIMEOUT_MS,
+    signal,
+  });
+
+  const models = (payload as Record<string, unknown> | null)?.models;
+  if (!Array.isArray(models) || !models.every((model) => typeof model === "string")) {
+    throw new BackendError("백엔드가 예상과 다른 형식을 반환했습니다.");
+  }
+  return models;
 }
 
 /**

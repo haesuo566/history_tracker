@@ -146,7 +146,7 @@ flowchart TD
     D -->|"ETC 확정"| E["여기서 끝<br/>(Gemini 재작성 생략)"]
     B --> B2["load_shown_documents<br/>각 턴이 보여준 결과 복원"]
     D -->|"RECALL 또는 판정불가"| F["latest_shown / past_shown<br/>후보 목록과 그 이전 목록으로 가름"]
-    F --> G["rewrite_query<br/>Gemini 1회 (구조화 출력)"]
+    F --> G["rewrite_query<br/>Gemini 1회 (도구 호출)"]
     G --> H["_settle_intent<br/>정규식 판정 + 재작성 판정 합치기"]
     H -->|"DETAIL"| I["resolve_target<br/>지목 문서 특정"]
     I -->|"실패"| J["RECALL 로 내려보냄"]
@@ -240,22 +240,39 @@ history 안의 assistant 턴 중 result_document_ids 가 있는 것을 모두 �
 
 ### ④ 재작성 호출 — 다섯 가지를 한 번에
 
-`rewrite_query`는 Gemini 구조화 출력으로 다음을 한 번에 받는다.
+`rewrite_query`는 의도마다 도구를 하나씩 선언하고, 모델이 그중 정확히 하나를 고르게 한다
+(function calling, `mode=ANY`). 어느 도구를 불렀는지가 곧 의도이고, 그 인자가 그 의도에 필요한
+값이다.
+
+| 도구 | 의도 | 인자 |
+| --- | --- | --- |
+| `search_history` | `recall` | `time_range`, `query`, `desired_count` |
+| `show_detail` | `detail` | `target_index`(1-based), `title_hint` |
+| `build_dashboard` | `dashboard` | `time_range` |
+| `chat` | `etc` | — |
+
+받은 호출은 `_parse_call`이 예전과 같은 `ParsedQuery`로 바꿔 내보낸다. 호출하는 쪽(`preprocess`)은
+도구가 있는지 모른다.
 
 ```python
 class ParsedQuery(BaseModel):
     intent: Intent              # recall | detail | dashboard | etc
     target_index: int | None    # detail 이면 지목한 항목의 1-based 번호
     time_range: TimeRange       # "어제", "지난주" 같은 기간을 라벨로
-    query: str                  # 검색 엔진에 넣기 좋게 다듬은 검색어
+    query: str                  # 검색어. detail 이면 title_hint, dashboard·etc 면 원문
     desired_count: int | None   # "3개만" 처럼 개수를 말했으면 그 숫자
 ```
 
-**필드 순서가 곧 추론 순서다.** 이 클래스는 그대로 응답 스키마로 전달되어 `propertyOrdering`이
-되므로, `intent`를 먼저 두면 의도를 정하고 그에 맞는 검색어를 쓰게 된다. `target_index`가
-`query`보다 앞인 것도 같은 이유다 — 지목한 대상을 먼저 정해야 그 제목을 검색어로 쓸 수 있다.
-`time_range`가 앞인 것 역시 같다. 시간 표현을 먼저 떼어내야 그것을 뺀 검색어를 쓰게 된다 —
-"어제"가 `query`에 남으면 그 낱말로 본문을 뒤져 엉뚱한 문서가 걸린다.
+**도구로 나눈 이유.** 모든 필드를 담는 단일 스키마로 받으면 "detail 이 아니면 `target_index`는
+null" 같은 조건부 규칙을 지시문으로 부탁해야 한다. 도구로 나누면 그 필드가 애초에 다른 도구에
+없다. 각 필드의 뜻과 경계 사례("d3 차트 글 찾아줘는 recall")도 긴 지시문 대신 도구 docstring과
+필드 `description`에 적어, 모델이 인자를 채우는 자리에서 바로 보게 한다. 그래서 시스템 지시에는
+역할, "도구 하나를 골라라", 지시 표현을 풀라는 원칙만 남는다. 작은 모델로 바꿀 때도 이 형태가 더
+잘 버틴다.
+
+인자 안에서도 **순서가 추론 순서다.** `search_history`의 `time_range`가 `query`보다 앞이다. 시간
+표현을 먼저 떼어내야 그것을 뺀 검색어를 쓰게 된다 — "어제"가 `query`에 남으면 그 낱말로 본문을
+뒤져 엉뚱한 문서가 걸린다. `show_detail`의 `target_index`가 `title_hint`보다 앞인 것도 같다.
 
 시스템 지시에는 **오늘 날짜가 붙는다.** 라벨의 구간 계산은 서버가 하지만 "8월 20일에 본 거"의
 연도와 "3월 초"의 해는 모델이 적어야 하고, 모델은 자기가 언제 불렸는지 모른다.
@@ -288,7 +305,7 @@ class ParsedQuery(BaseModel):
 이 조립은 `services/conversation/prompt.py`의 `render_history`가 맡고 답변 생성도 같은 함수를 쓴다. 규칙이
 갈리면 재작성은 "아까 그 두 번째"가 무엇인지 아는데 답변은 모르는 상태가 된다.
 
-응답이 스키마로 파싱되지 않으면 `ETC`로 눕혀 일반 대화로 답한다 — 의도조차 못 받은 상황에서
+도구를 부르지 않았거나, 모르는 도구를 불렀거나, 인자가 스키마에 맞지 않으면 `ETC`로 눕혀 일반 대화로 답한다 — 의도조차 못 받은 상황에서
 검색으로 밀어봐야 원문 그대로 찾는 헛질의가 된다.
 
 ### ⑤ 의도 확정 (`_settle_intent`)

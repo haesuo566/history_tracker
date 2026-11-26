@@ -7,7 +7,8 @@ Gemini의 models.list로 실시간 조회하는 대신 상수로 둔다. API key
 화면에서 고를 수 있는 후보일 뿐이고, DB에 저장할 때만 이 목록 안인지 검증한다.
 
 임베딩은 목록 대신 제공자(EmbeddingProvider)를 고른다. TEI는 서버에 올려둔 모델 하나를 그대로
-쓰므로 이쪽에서 후보를 늘어놓을 수 없다 — 무엇이 올라가 있는지는 그 서버만 안다.
+쓰므로 이쪽에서 후보를 늘어놓을 수 없다 — 무엇이 올라가 있는지는 그 서버만 안다. 생성 모델도
+제공자를 OpenAI 호환으로 고르면 같은 이유로 이 목록을 쓰지 않는다.
 """
 
 from enum import StrEnum
@@ -29,6 +30,24 @@ class EmbeddingModelOption(NamedTuple):
     max_input_tokens: int
 
 
+class GenerationProvider(StrEnum):
+    """질의 재작성·대시보드 구성·답변 생성을 어디에 맡길지."""
+
+    GEMINI = "gemini"
+    # Ollama·vLLM·LM Studio 등 /v1/chat/completions 를 내놓는 서버. 무엇이 올라가 있는지는 그 서버만
+    # 알아서, 모델은 위 목록에서 고르지 않고 이름을 직접 받는다.
+    OPENAI_COMPAT = "openai_compat"
+
+
+GENERATION_PROVIDER_LABELS = {
+    GenerationProvider.GEMINI: "Gemini API",
+    GenerationProvider.OPENAI_COMPAT: "OpenAI 호환 (Ollama·vLLM 등)",
+}
+
+# 제공자를 한 번도 고른 적 없는 환경은 예전처럼 Gemini를 쓴다.
+DEFAULT_GENERATION_PROVIDER = GenerationProvider.GEMINI
+
+
 class EmbeddingProvider(StrEnum):
     """임베딩을 어디서 받아올지."""
 
@@ -44,8 +63,8 @@ PROVIDER_LABELS = {
 # provider를 한 번도 고른 적 없는 환경은 예전처럼 Gemini를 쓴다.
 DEFAULT_EMBEDDING_PROVIDER = EmbeddingProvider.GEMINI
 
-# 답변 생성(answer_model)과 질의 재작성(query_rewrite_model)에 함께 쓰는 목록이다. 질의 재작성은
-# 구조화 출력(response_schema)을 쓰므로 그것을 지원하는 텍스트 모델만 담는다 — 이미지·음성·live
+# 질의 재작성·대시보드 구성·답변 생성이 함께 쓰는 generation_model의 선택지다. 질의 재작성은
+# 도구 호출(function calling)을 쓰므로 그것을 지원하는 텍스트 모델만 담는다 — 이미지·음성·live
 # 전용 모델은 제외했다.
 GENERATION_MODELS: tuple[ModelOption, ...] = (
     ModelOption("gemini-3.7-flash", "Gemini 3.7 Flash"),

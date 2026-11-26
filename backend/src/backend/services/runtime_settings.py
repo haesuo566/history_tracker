@@ -1,10 +1,12 @@
 """운영 중에 바꿀 수 있는 설정을 DB에서 읽고 쓴다.
 
 core.config.Settings는 .env를 기동 시점에 한 번 읽으므로 화면에서 바꿀 수 없다. 여기서는 그중
-설정 화면이 다루는 항목(API key, 모델 3종)만 app_settings 테이블에 덮어써서 재기동 없이 바꾼다.
+설정 화면이 다루는 항목(API key, 생성·임베딩 제공자와 모델 등)만 app_settings 테이블에 덮어써서 재기동 없이 바꾼다.
 DB에 값이 없는 항목은 .env 값을 그대로 쓴다 — 설정 화면을 한 번도 쓰지 않은 환경의 동작이
 기존과 같아야 한다.
 """
+
+from enum import StrEnum
 
 from loguru import logger
 from pydantic import BaseModel
@@ -13,11 +15,14 @@ from sqlalchemy.orm import Session
 from backend.core.config import settings
 from backend.core.model_catalog import (
     DEFAULT_EMBEDDING_PROVIDER,
+    DEFAULT_GENERATION_PROVIDER,
     EMBEDDING_MODELS,
     FALLBACK_MAX_INPUT_TOKENS,
     GENERATION_MODELS,
+    GENERATION_PROVIDER_LABELS,
     PROVIDER_LABELS,
     EmbeddingProvider,
+    GenerationProvider,
     chunk_chars_for,
     find_embedding_model,
 )
@@ -27,14 +32,30 @@ from backend.schemas.settings import ModelOption, ProviderOption, SettingsRespon
 
 API_KEY = "gemini_api_key"
 EMBEDDING_MODEL = "embedding_model"
-QUERY_REWRITE_MODEL = "query_rewrite_model"
-ANSWER_MODEL = "answer_model"
+GENERATION_MODEL = "generation_model"
 EMBEDDING_PROVIDER = "embedding_provider"
 TEI_BASE_URL = "tei_base_url"
 TEI_MODEL = "tei_model"
+GENERATION_PROVIDER = "generation_provider"
+LLM_BASE_URL = "llm_base_url"
+LLM_MODEL = "llm_model"
+LLM_API_KEY = "llm_api_key"
+LLM_DISABLE_THINKING = "llm_disable_thinking"
 
 SETTING_KEYS = frozenset(
-    {API_KEY, EMBEDDING_MODEL, QUERY_REWRITE_MODEL, ANSWER_MODEL, EMBEDDING_PROVIDER, TEI_BASE_URL, TEI_MODEL}
+    {
+        API_KEY,
+        EMBEDDING_MODEL,
+        GENERATION_MODEL,
+        EMBEDDING_PROVIDER,
+        TEI_BASE_URL,
+        TEI_MODEL,
+        GENERATION_PROVIDER,
+        LLM_BASE_URL,
+        LLM_MODEL,
+        LLM_API_KEY,
+        LLM_DISABLE_THINKING,
+    }
 )
 
 # 색인이 어떤 임베딩으로 만들어졌는지 남겨 두는 자리. 설정이 아니라 상태이므로 설정 화면이
@@ -48,14 +69,28 @@ INDEX_STATE_KEYS = frozenset({INDEXED_DIM, INDEXED_SIGNATURE, INDEXED_CHUNK_CHAR
 # 청크 크기를 기록하기 전에 만들어진 색인은 이 값으로 쌓여 있다(옛 상수 2048토큰 x 4자).
 LEGACY_CHUNK_CHARS = 8192
 
+# 생성 모델을 질의 재작성용과 답변용으로 나눠 두던 시절의 키. 그때 화면에서 고른 답변 모델을
+# 잃지 않도록, 새 키가 저장되기 전까지는 이 값을 이어서 쓴다. 질의 재작성 쪽 값은 버린다.
+LEGACY_ANSWER_MODEL = "answer_model"
+
 
 class RuntimeSettings(BaseModel):
     """지금 유효한 설정값. DB에 저장된 값과 .env 폴백을 합친 결과다."""
 
     gemini_api_key: str
     embedding_model: str
-    query_rewrite_model: str
-    answer_model: str
+    # 질의 재작성·대시보드 구성·답변 생성을 어디에 맡길지. generation_model은 Gemini일 때의
+    # 모델이고, OpenAI 호환일 때는 llm_* 항목을 쓴다. 둘을 따로 두어 제공자를 오가도 각자의 값이
+    # 남는다.
+    generation_provider: GenerationProvider
+    generation_model: str
+    llm_base_url: str
+    llm_model: str
+    # OpenAI 호환 서버의 키. 로컬 서버는 대개 키가 없어 비워 둔다.
+    llm_api_key: str
+    # 추론 모델의 생각을 건너뛰게 할지. 로컬에서는 응답이 열 배 넘게 빨라지지만, 이 요청 필드를
+    # 거절하는 서버가 있어 기본은 끈다.
+    llm_disable_thinking: bool
     # provider와 TEI 주소는 .env에 두지 않는다. Settings는 항목이 비면 기동에 실패하므로,
     # 필수 항목을 새로 더하면 이미 돌고 있는 배포가 .env를 고칠 때까지 뜨지 않는다.
     embedding_provider: EmbeddingProvider
@@ -123,9 +158,19 @@ def load_settings(db: Session) -> RuntimeSettings:
     return RuntimeSettings(
         gemini_api_key=stored.get(API_KEY) or settings.gemini_api_key,
         embedding_model=embedding_model,
-        query_rewrite_model=stored.get(QUERY_REWRITE_MODEL) or settings.query_rewrite_model,
-        answer_model=stored.get(ANSWER_MODEL) or settings.answer_model,
-        embedding_provider=_parse_provider(stored.get(EMBEDDING_PROVIDER)),
+        generation_provider=_parse_enum(
+            GenerationProvider, stored.get(GENERATION_PROVIDER), DEFAULT_GENERATION_PROVIDER
+        ),
+        generation_model=stored.get(GENERATION_MODEL)
+        or stored.get(LEGACY_ANSWER_MODEL)
+        or settings.generation_model,
+        llm_base_url=stored.get(LLM_BASE_URL) or "",
+        llm_model=stored.get(LLM_MODEL) or "",
+        llm_api_key=stored.get(LLM_API_KEY) or "",
+        llm_disable_thinking=stored.get(LLM_DISABLE_THINKING) == "true",
+        embedding_provider=_parse_enum(
+            EmbeddingProvider, stored.get(EMBEDDING_PROVIDER), DEFAULT_EMBEDDING_PROVIDER
+        ),
         tei_base_url=stored.get(TEI_BASE_URL) or "",
         tei_model=stored.get(TEI_MODEL) or "",
         # 재색인을 한 번도 하지 않은 환경은 Gemini로 EMBEDDING_DIM 차원으로 쌓여 있다. 그것이
@@ -137,19 +182,19 @@ def load_settings(db: Session) -> RuntimeSettings:
     )
 
 
-def _parse_provider(value: str | None) -> EmbeddingProvider:
+def _parse_enum[E: StrEnum](kind: type[E], value: str | None, default: E) -> E:
     """저장된 provider 문자열을 해석한다. 알 수 없는 값이면 기본값으로 되돌린다.
 
     저장 시점에 검증하므로 정상 경로에서는 걸리지 않지만, DB를 직접 고친 경우에 여기서 죽으면
     설정 화면조차 열 수 없어 되돌릴 방법이 없어진다.
     """
     if value is None:
-        return DEFAULT_EMBEDDING_PROVIDER
+        return default
     try:
-        return EmbeddingProvider(value)
+        return kind(value)
     except ValueError:
-        logger.warning("unknown embedding provider stored, falling back: {!r}", value)
-        return DEFAULT_EMBEDDING_PROVIDER
+        logger.warning("unknown {} stored, falling back: {!r}", kind.__name__, value)
+        return default
 
 
 def _parse_dim(value: str | None) -> int:
@@ -179,20 +224,36 @@ def get_settings() -> RuntimeSettings:
     return _cache
 
 
-def save_settings(updates: dict[str, str], db: Session) -> RuntimeSettings:
+def save_settings(updates: dict[str, str | bool], db: Session) -> RuntimeSettings:
     """넘긴 항목만 DB에 덮어쓰고 갱신된 설정을 돌려준다. 캐시도 이 자리에서 갱신한다."""
     unknown = set(updates) - SETTING_KEYS
     if unknown:
         raise ValueError(f"unknown setting key(s): {sorted(unknown)}")
+    # app_settings.value는 문자열이다. 켜고 끄는 항목은 "true"/"false"로 남긴다.
+    texts = {key: (str(value).lower() if isinstance(value, bool) else value) for key, value in updates.items()}
 
     # 부분 갱신이라 항목 하나만 봐서는 결과가 성립하는지 알 수 없다. 저장된 값과 합친 뒤에 본다.
     current = load_settings(db)
-    provider = _parse_provider(updates.get(EMBEDDING_PROVIDER) or current.embedding_provider.value)
-    base_url = updates.get(TEI_BASE_URL, current.tei_base_url)
+    provider = _parse_enum(
+        EmbeddingProvider, texts.get(EMBEDDING_PROVIDER) or current.embedding_provider.value, DEFAULT_EMBEDDING_PROVIDER
+    )
+    base_url = texts.get(TEI_BASE_URL, current.tei_base_url)
     if provider is EmbeddingProvider.TEI and not base_url:
         raise ValueError("tei_base_url is required when embedding_provider is tei")
 
-    return _write(updates, db)
+    generation = _parse_enum(
+        GenerationProvider,
+        texts.get(GENERATION_PROVIDER) or current.generation_provider.value,
+        DEFAULT_GENERATION_PROVIDER,
+    )
+    if generation is GenerationProvider.OPENAI_COMPAT:
+        # 둘 중 하나라도 비면 저장은 되고 다음 질문부터 전부 실패한다.
+        if not texts.get(LLM_BASE_URL, current.llm_base_url):
+            raise ValueError("llm_base_url is required when generation_provider is openai_compat")
+        if not texts.get(LLM_MODEL, current.llm_model):
+            raise ValueError("llm_model is required when generation_provider is openai_compat")
+
+    return _write(texts, db)
 
 
 def save_index_state(dim: int, signature: str, chunk_chars: int, db: Session) -> RuntimeSettings:
@@ -232,8 +293,13 @@ def describe_settings(db: Session) -> SettingsResponse:
     """설정 화면이 그릴 수 있도록 지금 값과 선택지를 함께 담아 돌려준다."""
     current = load_settings(db)
     return SettingsResponse(
-        answer_model=current.answer_model,
-        query_rewrite_model=current.query_rewrite_model,
+        generation_provider=current.generation_provider,
+        generation_model=current.generation_model,
+        llm_base_url=current.llm_base_url,
+        llm_model=current.llm_model,
+        llm_api_key_configured=bool(current.llm_api_key),
+        llm_api_key_hint=_mask_api_key(current.llm_api_key),
+        llm_disable_thinking=current.llm_disable_thinking,
         embedding_model=current.embedding_model,
         embedding_provider=current.embedding_provider,
         tei_base_url=current.tei_base_url,
@@ -246,12 +312,15 @@ def describe_settings(db: Session) -> SettingsResponse:
         vector_search_active=current.vector_index_usable,
         api_key_configured=bool(current.gemini_api_key),
         api_key_hint=_mask_api_key(current.gemini_api_key),
+        generation_providers=[
+            ProviderOption(id=provider.value, label=label) for provider, label in GENERATION_PROVIDER_LABELS.items()
+        ],
         embedding_providers=[
             ProviderOption(id=provider.value, label=label) for provider, label in PROVIDER_LABELS.items()
         ],
         generation_models=_with_current(
             [ModelOption(id=option.id, label=option.label) for option in GENERATION_MODELS],
-            (current.answer_model, current.query_rewrite_model),
+            (current.generation_model,),
         ),
         embedding_models=_with_current(
             [ModelOption(id=option.id, label=option.label) for option in EMBEDDING_MODELS],

@@ -1,9 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from backend.db.session import get_db
-from backend.schemas.settings import SettingsResponse, SettingsUpdateRequest
-from backend.services.runtime_settings import describe_settings, save_settings
+from backend.schemas.settings import (
+    LlmModelsResponse,
+    SettingsResponse,
+    SettingsUpdateRequest,
+)
+from backend.services.llm.generation import LlmError
+from backend.services.llm.openai_compat import list_models
+from backend.services.runtime_settings import (
+    describe_settings,
+    load_settings,
+    save_settings,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -29,3 +39,22 @@ def update(request: SettingsUpdateRequest, db: Session = Depends(get_db)) -> Set
             # 항목별 형식이 아니라 합친 결과가 성립하지 않는 경우다(예: TEI인데 주소가 없음).
             raise HTTPException(status_code=422, detail=str(error)) from error
     return describe_settings(db)
+
+
+@router.get("/llm-models")
+def llm_models(
+    base_url: str | None = Query(None, description="생략하면 저장된 주소를 쓴다."),
+    db: Session = Depends(get_db),
+) -> LlmModelsResponse:
+    """OpenAI 호환 서버에 올라가 있는 모델 이름들. 주소를 저장하기 전에 연결을 확인하는 데에도 쓴다.
+
+    키는 쿼리로 받지 않고 저장된 것을 쓴다. 쿼리에 실으면 접근 로그에 원문이 남는다.
+    """
+    current = load_settings(db)
+    url = (base_url or current.llm_base_url).strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=422, detail="서버 주소는 http:// 또는 https:// 로 시작해야 합니다.")
+    try:
+        return LlmModelsResponse(models=list_models(url, current.llm_api_key or None))
+    except LlmError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error

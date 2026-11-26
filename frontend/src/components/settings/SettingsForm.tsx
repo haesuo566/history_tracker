@@ -7,6 +7,9 @@ import { BATCH_LABEL } from "@/components/chat/BatchControl";
 import { useSettings } from "@/hooks/useSettings";
 import type {
   EmbeddingProvider,
+  ErrorBody,
+  GenerationProvider,
+  LlmModelsBody,
   ModelOption,
   ReindexSummary,
   SettingsBody,
@@ -39,8 +42,14 @@ function Spinner() {
 
 /** 화면이 편집 중인 값. */
 interface Draft {
-  answerModel: string;
-  queryRewriteModel: string;
+  generationProvider: GenerationProvider;
+  generationModel: string;
+  llmBaseUrl: string;
+  llmModel: string;
+  /** 비어 있으면 '키를 바꾸지 않음'이다. 지우려면 clearLlmApiKey 를 켠다. */
+  llmApiKey: string;
+  clearLlmApiKey: boolean;
+  llmDisableThinking: boolean;
   embeddingProvider: EmbeddingProvider;
   embeddingModel: string;
   teiBaseUrl: string;
@@ -60,8 +69,13 @@ type Overrides = Partial<Draft>;
 
 function draftOf(settings: SettingsBody, overrides: Overrides): Draft {
   return {
-    answerModel: settings.answer_model,
-    queryRewriteModel: settings.query_rewrite_model,
+    generationProvider: settings.generation_provider,
+    generationModel: settings.generation_model,
+    llmBaseUrl: settings.llm_base_url,
+    llmModel: settings.llm_model,
+    llmApiKey: "",
+    clearLlmApiKey: false,
+    llmDisableThinking: settings.llm_disable_thinking,
     embeddingProvider: settings.embedding_provider,
     embeddingModel: settings.embedding_model,
     teiBaseUrl: settings.tei_base_url,
@@ -73,9 +87,27 @@ function draftOf(settings: SettingsBody, overrides: Overrides): Draft {
 
 function changesOf(draft: Draft, settings: SettingsBody): SettingsUpdateBody {
   const updates: SettingsUpdateBody = {};
-  if (draft.answerModel !== settings.answer_model) updates.answer_model = draft.answerModel;
-  if (draft.queryRewriteModel !== settings.query_rewrite_model) {
-    updates.query_rewrite_model = draft.queryRewriteModel;
+  if (draft.generationProvider !== settings.generation_provider) {
+    updates.generation_provider = draft.generationProvider;
+  }
+  // 임베딩과 같은 이유로, 지금 고른 생성 모델 제공자의 항목만 보낸다.
+  if (draft.generationProvider === "gemini") {
+    if (draft.generationModel !== settings.generation_model) {
+      updates.generation_model = draft.generationModel;
+    }
+  } else {
+    const llmBaseUrl = draft.llmBaseUrl.trim();
+    if (llmBaseUrl !== settings.llm_base_url) updates.llm_base_url = llmBaseUrl;
+    const llmModel = draft.llmModel.trim();
+    if (llmModel !== settings.llm_model) updates.llm_model = llmModel;
+    if (draft.clearLlmApiKey) {
+      if (settings.llm_api_key_configured) updates.llm_api_key = "";
+    } else if (draft.llmApiKey.trim().length > 0) {
+      updates.llm_api_key = draft.llmApiKey.trim();
+    }
+    if (draft.llmDisableThinking !== settings.llm_disable_thinking) {
+      updates.llm_disable_thinking = draft.llmDisableThinking;
+    }
   }
   if (draft.embeddingProvider !== settings.embedding_provider) {
     updates.embedding_provider = draft.embeddingProvider;
@@ -94,8 +126,18 @@ function changesOf(draft: Draft, settings: SettingsBody): SettingsUpdateBody {
   return updates;
 }
 
-/** 저장 버튼을 누르지 못하게 막을 이유가 있으면 그 문구를, 없으면 null. */
-function blockedReason(draft: Draft): string | null {
+/** 생성 모델 설정 때문에 저장을 막을 이유가 있으면 그 문구를, 없으면 null. */
+function generationBlockedReason(draft: Draft): string | null {
+  if (draft.generationProvider !== "openai_compat") return null;
+  const baseUrl = draft.llmBaseUrl.trim();
+  if (baseUrl.length === 0) return "서버 주소를 입력해야 저장할 수 있습니다.";
+  if (!/^https?:\/\//.test(baseUrl)) return "서버 주소는 http:// 또는 https:// 로 시작해야 합니다.";
+  if (draft.llmModel.trim().length === 0) return "모델 이름을 입력해야 저장할 수 있습니다.";
+  return null;
+}
+
+/** 임베딩 설정 때문에 저장을 막을 이유가 있으면 그 문구를, 없으면 null. */
+function embeddingBlockedReason(draft: Draft): string | null {
   if (draft.embeddingProvider !== "tei") return null;
   const baseUrl = draft.teiBaseUrl.trim();
   if (baseUrl.length === 0) return "TEI 주소를 입력해야 저장할 수 있습니다.";
@@ -105,6 +147,26 @@ function blockedReason(draft: Draft): string | null {
 
 const INPUT_CLASS =
   "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 transition-colors hover:border-zinc-300 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-700";
+
+/** 서버에 어떤 모델이 있는지 물어본 결과. 실패해도 모델 이름은 직접 입력할 수 있다. */
+type LlmModelsState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; models: string[] }
+  | { status: "failed"; error: string };
+
+async function fetchLlmModels(baseUrl: string): Promise<string[]> {
+  const query = baseUrl.length > 0 ? `?${new URLSearchParams({ base_url: baseUrl })}` : "";
+  const response = await fetch(`/api/settings/llm-models${query}`);
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((payload: ErrorBody) => payload.message)
+      .catch(() => null);
+    throw new Error(detail ?? `요청이 실패했습니다 (${response.status}).`);
+  }
+  return ((await response.json()) as LlmModelsBody).models;
+}
 
 const SELECT_CLASS =
   "w-full appearance-none rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 transition-colors hover:border-zinc-300 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:border-zinc-700";
@@ -190,6 +252,7 @@ export function SettingsForm() {
   const [embeddingChanged, setEmbeddingChanged] = useState(false);
   const [confirmingReindex, setConfirmingReindex] = useState(false);
   const [reindexResult, setReindexResult] = useState<ReindexSummary | null>(null);
+  const [llmModels, setLlmModels] = useState<LlmModelsState>({ status: "idle" });
 
   const isSaving = status === "saving";
   const isReindexing = status === "reindexing";
@@ -222,7 +285,11 @@ export function SettingsForm() {
 
   const draft = draftOf(settings, overrides);
   const updates = changesOf(draft, settings);
-  const blocked = blockedReason(draft);
+  const generationBlocked = generationBlockedReason(draft);
+  const embeddingBlocked = embeddingBlockedReason(draft);
+  const blocked = generationBlocked ?? embeddingBlocked;
+  // 저장된 설정 기준이다. 화면에서 고르기만 하고 저장하지 않은 제공자로는 아직 키가 필요하지 않다.
+  const needsGeminiKey = settings.generation_provider === "gemini" || settings.embedding_provider === "gemini";
   const hasChanges = Object.keys(updates).length > 0;
   // 모델은 그대로인데 청크만 예전 기준인 경우. 벡터는 쓸 수 있으니 경고의 무게가 다르다.
   const chunkSizeStale =
@@ -256,6 +323,18 @@ export function SettingsForm() {
     }
   }
 
+  async function loadLlmModels() {
+    setLlmModels({ status: "loading" });
+    try {
+      setLlmModels({ status: "ready", models: await fetchLlmModels(draft.llmBaseUrl.trim()) });
+    } catch (caught) {
+      setLlmModels({
+        status: "failed",
+        error: caught instanceof Error ? caught.message : "알 수 없는 오류가 발생했습니다.",
+      });
+    }
+  }
+
   async function handleReindex() {
     const summary = await reindex();
     setConfirmingReindex(false);
@@ -271,35 +350,169 @@ export function SettingsForm() {
 
       {isSaved && <Notice tone="info">설정을 저장했습니다.</Notice>}
 
-      <Section title="AI 모델">
+      <Section title="생성 모델">
         <Field
-          id="answer-model"
-          label="답변 생성"
-          hint="찾은 기록과 본문을 근거로 답변 문장을 만드는 모델입니다."
+          id="generation-provider"
+          label="제공자"
+          hint="질문의 의도를 판단해 검색어로 다시 쓰고, 찾은 기록을 근거로 답변을 만드는 쪽입니다. 바꿔도 색인은 다시 만들 필요가 없습니다."
         >
           <ModelSelect
-            id="answer-model"
-            value={draft.answerModel}
-            options={settings.generation_models}
+            id="generation-provider"
+            value={draft.generationProvider}
+            options={settings.generation_providers}
             disabled={isBusy}
-            onChange={(value) => edit({ answerModel: value })}
+            onChange={(value) => edit({ generationProvider: value as GenerationProvider })}
           />
         </Field>
 
-        <Field
-          id="query-rewrite-model"
-          label="질의 재작성"
-          hint="질문의 의도를 판단하고 검색어로 다시 쓰는 모델입니다. 매 질문마다 한 번 불립니다."
-        >
-          <ModelSelect
-            id="query-rewrite-model"
-            value={draft.queryRewriteModel}
-            options={settings.generation_models}
-            disabled={isBusy}
-            onChange={(value) => edit({ queryRewriteModel: value })}
-          />
-        </Field>
+        {draft.generationProvider === "gemini" ? (
+          <Field id="generation-model" label="Gemini 모델" hint="질의 해석과 답변 생성에 함께 씁니다.">
+            <ModelSelect
+              id="generation-model"
+              value={draft.generationModel}
+              options={settings.generation_models}
+              disabled={isBusy}
+              onChange={(value) => edit({ generationModel: value })}
+            />
+          </Field>
+        ) : (
+          <>
+            <Field
+              id="llm-base-url"
+              label="서버 주소"
+              hint="/v1/chat/completions 를 제공하는 서버입니다(Ollama·vLLM·LM Studio 등). /v1 은 붙이지 않아도 됩니다."
+            >
+              <input
+                id="llm-base-url"
+                type="url"
+                value={draft.llmBaseUrl}
+                disabled={isBusy}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="llm-base-url-hint"
+                placeholder="http://127.0.0.1:11434"
+                onChange={(event) => {
+                  edit({ llmBaseUrl: event.target.value });
+                  // 다른 서버의 목록이 남아 있으면 그 서버에 없는 모델을 고르게 된다.
+                  setLlmModels({ status: "idle" });
+                }}
+                className={`${INPUT_CLASS} font-mono`}
+              />
+            </Field>
 
+            <Field
+              id="llm-model"
+              label="모델"
+              hint="서버에 올라가 있는 모델 이름입니다. 목록을 불러와 고르거나 직접 입력하세요."
+            >
+              <div className="flex gap-2">
+                <input
+                  id="llm-model"
+                  type="text"
+                  list="llm-model-options"
+                  value={draft.llmModel}
+                  disabled={isBusy}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-describedby="llm-model-hint"
+                  placeholder="qwen3.5:4b"
+                  onChange={(event) => edit({ llmModel: event.target.value })}
+                  className={`${INPUT_CLASS} font-mono`}
+                />
+                <button
+                  type="button"
+                  onClick={loadLlmModels}
+                  disabled={isBusy || llmModels.status === "loading" || draft.llmBaseUrl.trim().length === 0}
+                  aria-busy={llmModels.status === "loading"}
+                  className="flex shrink-0 items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm font-medium text-zinc-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:text-zinc-300 dark:hover:border-blue-900/60 dark:hover:bg-blue-950/30"
+                >
+                  {llmModels.status === "loading" && <Spinner />}
+                  서버에서 불러오기
+                </button>
+              </div>
+              <datalist id="llm-model-options">
+                {llmModels.status === "ready" &&
+                  llmModels.models.map((model) => <option key={model} value={model} />)}
+              </datalist>
+            </Field>
+
+            {llmModels.status === "failed" && <Notice tone="error">{llmModels.error}</Notice>}
+            {llmModels.status === "ready" && (
+              <p className="text-xs leading-relaxed text-zinc-500 dark:text-zinc-400">
+                {llmModels.models.length === 0
+                  ? "서버에 연결했지만 올라가 있는 모델이 없습니다."
+                  : `서버에 연결했습니다. 모델 ${llmModels.models.length}개: ${llmModels.models.join(", ")}`}
+                {llmModels.models.length > 0 &&
+                  draft.llmModel.trim().length > 0 &&
+                  !llmModels.models.includes(draft.llmModel.trim()) && (
+                    <span className="block text-amber-700 dark:text-amber-400">
+                      입력한 모델이 이 서버의 목록에 없습니다.
+                    </span>
+                  )}
+              </p>
+            )}
+
+            <Field
+              id="llm-api-key"
+              label="API key (선택)"
+              hint={
+                settings.llm_api_key_configured
+                  ? `저장된 키가 있습니다${settings.llm_api_key_hint === null ? "" : ` (${settings.llm_api_key_hint})`}. 바꿀 때만 입력하세요.`
+                  : "로컬 서버는 대개 필요 없습니다. OpenAI·OpenRouter 처럼 키를 요구하는 서버일 때만 넣으세요."
+              }
+            >
+              <input
+                id="llm-api-key"
+                type="password"
+                value={draft.llmApiKey}
+                disabled={isBusy || draft.clearLlmApiKey}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="llm-api-key-hint"
+                placeholder={settings.llm_api_key_configured ? "변경하지 않음" : "없음"}
+                onChange={(event) => edit({ llmApiKey: event.target.value })}
+                className={`${INPUT_CLASS} font-mono`}
+              />
+              {settings.llm_api_key_configured && (
+                <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={draft.clearLlmApiKey}
+                    disabled={isBusy}
+                    onChange={(event) => edit({ clearLlmApiKey: event.target.checked, llmApiKey: "" })}
+                    className="size-4 accent-blue-600"
+                  />
+                  저장된 키 지우기
+                </label>
+              )}
+            </Field>
+
+            <label className="flex items-start gap-2.5">
+              <input
+                type="checkbox"
+                checked={draft.llmDisableThinking}
+                disabled={isBusy}
+                aria-describedby="llm-disable-thinking-hint"
+                onChange={(event) => edit({ llmDisableThinking: event.target.checked })}
+                className="mt-0.5 size-4 accent-blue-600"
+              />
+              <span className="space-y-1">
+                <span className="block text-sm font-medium text-zinc-800 dark:text-zinc-100">생각 끄기</span>
+                <span
+                  id="llm-disable-thinking-hint"
+                  className="block text-xs leading-relaxed text-zinc-500 dark:text-zinc-400"
+                >
+                  추론 모델(Qwen3·DeepSeek-R1 등)의 생각 단계를 건너뜁니다. Ollama 에서는 응답이 열 배 넘게
+                  빨라집니다. 이 옵션을 거절하는 서버라면 질문이 실패하니 끄세요.
+                </span>
+              </span>
+            </label>
+          </>
+        )}
+
+        {generationBlocked !== null && (
+          <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">{generationBlocked}</p>
+        )}
       </Section>
 
       <Section title="임베딩">
@@ -373,8 +586,8 @@ export function SettingsForm() {
           </>
         )}
 
-        {blocked !== null && (
-          <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">{blocked}</p>
+        {embeddingBlocked !== null && (
+          <p className="text-xs leading-relaxed text-amber-700 dark:text-amber-400">{embeddingBlocked}</p>
         )}
 
         {embeddingChanged && (
@@ -472,7 +685,9 @@ export function SettingsForm() {
           hint={
             settings.api_key_configured
               ? `저장된 키가 있습니다${settings.api_key_hint === null ? "" : ` (${settings.api_key_hint})`}. 바꿀 때만 입력하세요.`
-              : "키가 없으면 검색과 색인이 모두 실패합니다. Google AI Studio에서 발급한 키를 입력하세요."
+              : needsGeminiKey
+                ? "Gemini 를 쓰는 동안은 키가 없으면 검색과 색인이 실패합니다. Google AI Studio에서 발급한 키를 입력하세요."
+                : "생성 모델과 임베딩 모두 Gemini 를 쓰지 않으므로 지금은 필요 없습니다."
           }
         >
           <input
@@ -489,7 +704,7 @@ export function SettingsForm() {
           />
         </Field>
 
-        {!settings.api_key_configured && (
+        {!settings.api_key_configured && needsGeminiKey && (
           <Notice tone="warn">API key가 설정되지 않아 지금은 질문에 답할 수 없습니다.</Notice>
         )}
       </Section>

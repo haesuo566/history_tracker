@@ -36,10 +36,11 @@ src/
     api/batch/route.ts     색인 트리거를 백엔드 /batch 로 프록시
     api/conversations/     대화 목록·조회·이름변경·삭제 프록시
     api/settings/route.ts  설정 조회·저장 프록시
+    api/settings/llm-models/route.ts  OpenAI 호환 서버의 모델 목록 프록시
     api/reindex/route.ts   색인 비우기 프록시
     layout.tsx             전체 화면 레이아웃 (입력창 하단 고정)
     page.tsx               채팅 페이지
-    settings/page.tsx      설정 페이지 (모델 선택, API key)
+    settings/page.tsx      설정 페이지 (생성·임베딩 제공자와 모델, API key)
     globals.css            Tailwind + 테마 변수
   components/chat/
     ChatContainer.tsx      입력 상태 + 헤더/사이드바/목록/입력창 조합

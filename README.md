@@ -90,7 +90,7 @@ cp .env.example .env
 설정값은 전부 `.env` 에서 읽습니다. 코드에 기본값이 없으므로 아래 항목이 하나라도
 비어 있으면 서버가 뜨지 않습니다.
 
-★ 표시한 네 항목은 [설정 화면](#5-설정)에서 재기동 없이 바꿀 수 있고, 한 번 저장하면 그 값이
+★ 표시한 세 항목은 [설정 화면](#5-설정)에서 재기동 없이 바꿀 수 있고, 한 번 저장하면 그 값이
 `.env` 보다 우선합니다. 나머지는 `.env` 전용입니다.
 
 | 환경변수 | 예시값 | 설명 |
@@ -101,8 +101,7 @@ cp .env.example .env
 | `DATABASE_URL` | `sqlite:///./app.db` | SQLite 이외를 쓰면 `vec_chunks`/`chunk_fts` 가 생성되지 않습니다 |
 | `EMBEDDING_DIM` | `3072` | 색인 후 변경하면 기존 벡터와 차원이 어긋납니다 |
 | `EMBEDDING_MODEL` ★ | `gemini-embedding-001` | |
-| `QUERY_REWRITE_MODEL` ★ | `gemini-3.1-flash-lite` | 질의 재작성·의도 판단용 |
-| `ANSWER_MODEL` ★ | `gemini-3.1-flash-lite` | 답변 생성용 |
+| `GENERATION_MODEL` ★ | `gemini-3.1-flash-lite` | 질의 재작성·의도 판단·답변 생성에 함께 쓰는 모델 |
 | `MIN_COSINE_SIMILARITY` | `0.5` | 벡터 검색 최소 유사도 |
 | `MIN_FTS_MATCHED_TERMS` | `1` | FTS 검색 최소 일치 명사 수 |
 | `CHAT_HISTORY_MESSAGES` | `30` | 프롬프트에 넣을 직전 대화 개수 |
@@ -143,7 +142,7 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 
 ### 5. 설정
 
-화면 우측 상단의 톱니바퀴(`/settings`)에서 모델과 Gemini API key, 임베딩 제공자를 바꿉니다.
+화면 우측 상단의 톱니바퀴(`/settings`)에서 생성·임베딩 제공자와 모델, API key 를 바꿉니다.
 저장한 값은 `app_settings` 테이블에 남아 `.env` 보다 우선하고, 서버를 다시 띄우지 않아도 다음
 요청부터 적용됩니다.
 
@@ -155,11 +154,48 @@ http://localhost:3000 접속. 백엔드 주소가 기본값(`http://127.0.0.1:80
 설정 변경은 프로세스 안의 캐시를 갱신하는 방식이라, 워커를 여러 개 띄우면 변경을 받지 못한
 워커가 남습니다. 즉시 반영이 필요하면 단일 워커로 띄우세요.
 
-### 6. 임베딩 제공자 (Gemini 또는 TEI)
+### 6. 생성 모델 제공자 (Gemini 또는 로컬 LLM)
+
+질의 재작성·대시보드 구성·답변 생성은 Gemini 대신 OpenAI 호환 서버(`POST /v1/chat/completions`)에
+맡길 수 있습니다. Ollama·vLLM·LM Studio·llama.cpp server 가 모두 이 규약을 내놓으므로 로컬 LLM 이
+그대로 붙고, OpenAI·OpenRouter 같은 원격 서비스도 같습니다.
+
+Ollama 를 예로 들면 모델을 받아 둡니다. 아래는 동작 확인에 쓴 4B 모델이고, 한국어 질의 해석의
+정확도를 생각하면 Qwen 계열 7B 이상을 권합니다.
+
+```bash
+ollama pull qwen3.5:4b
+```
+
+Ollama 의 기본 context 길이로는 검색 결과나 문서 본문을 근거로 싣는 답변이 넘쳐서
+`the prompt is longer than the context length` 로 실패합니다. OpenAI 호환 경로에는 이 값을 정하는
+필드가 없으므로 서버를 띄울 때 늘려 둡니다(상세 답변은 본문을 `DETAIL_MAX_CHARS` 까지 싣습니다).
+
+```bash
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve
+```
+
+설정 화면에서 생성 모델 제공자를 'OpenAI 호환' 으로 바꾸고 다음을 넣어 저장합니다. 재색인은 필요
+없고 다음 질문부터 적용됩니다.
+
+| 항목 | 예시 | 설명 |
+| --- | --- | --- |
+| 서버 주소 | `http://127.0.0.1:11434` | `/v1`, `/v1/chat/completions` 를 붙여 적어도 됩니다 |
+| 모델 | `qwen3.5:4b` | 서버의 `/v1/models` 목록에서 고르거나 직접 입력합니다 |
+| API key | (비워 둠) | 로컬 서버는 대개 필요 없습니다. 비워서 저장하면 지워집니다 |
+| 생각 끄기 | 켬 | 추론 모델의 생각 단계를 건너뜁니다(`reasoning_effort: "none"`). Ollama 에서 응답이 열 배 넘게 빨라집니다. 이 필드를 거절하는 서버라면 끄세요 |
+
+- 도구 고르기(질의 재작성)와 대시보드 구성은 `response_format: json_schema` 로 받습니다. 서버가
+  문법 제약으로 형식을 지켜 주므로 작은 모델에서도 JSON 이 깨지지 않지만, 판단의 정확도는 모델
+  크기를 따라갑니다.
+- 서버에 붙지 못하거나 오류가 나면 `/chat` 은 `502` 와 사유(`detail`)를 돌려줍니다.
+- Gemini 쪽 모델 설정은 그대로 남아, 제공자를 되돌리면 예전 설정으로 돌아갑니다.
+
+### 7. 임베딩 제공자 (Gemini 또는 TEI)
 
 임베딩은 Gemini API 대신 자체 호스팅 [TEI](https://github.com/huggingface/text-embeddings-inference)
-로 받을 수 있습니다. 답변 생성과 질의 재작성은 그대로 Gemini 를 쓰므로 API key 는 여전히
-필요합니다. 임베딩만 밖으로 내보내지 않게 되는 것입니다.
+로 받을 수 있습니다. 생성 모델 제공자와는 따로 고릅니다. 둘 다 Gemini 가 아니면 Gemini API key 는
+필요 없습니다.
 
 TEI 를 띄웁니다(예: bge-m3).
 
@@ -250,8 +286,9 @@ bge-m3 를 기준으로 맞춰 두었습니다. 다른 모델을 쓸 때 걸리�
 | `GET` | `/conversations/{conversation_id}` | — | `{ conversation_id, created_at, messages: [{ role, content, created_at }] }`, 모르는 id 면 `404` |
 | `PATCH` | `/conversations/{conversation_id}` | `{ "title": "..." }` | `204`, 모르는 id 면 `404`, 빈 문자열이거나 60자를 넘는 `title` 이면 `422` |
 | `DELETE` | `/conversations/{conversation_id}` | — | `204`, 모르는 id 면 `404` |
-| `GET` | `/settings` | — | 지금 설정과 선택지. 모델 3종, `embedding_provider`, `tei_base_url`, `tei_model`, `embedding_dim`, `indexed_dim`, `reindex_required`, `api_key_configured`, `api_key_hint`, 선택지 목록 |
-| `PATCH` | `/settings` | 모델 3종, `embedding_provider`, `tei_base_url`, `tei_model`, `gemini_api_key` 중 바꿀 것만 | `GET` 과 같은 형태의 갱신 결과. 목록 밖 모델·빈 `gemini_api_key`·주소 없는 `tei` 면 `422` |
+| `GET` | `/settings` | — | 지금 설정과 선택지. `generation_provider`, `generation_model`, `llm_base_url`, `llm_model`, `llm_api_key_configured`, `llm_api_key_hint`, `llm_disable_thinking`, `embedding_model`, `embedding_provider`, `tei_base_url`, `tei_model`, `embedding_dim`, `indexed_dim`, `reindex_required`, `api_key_configured`, `api_key_hint`, 선택지 목록 |
+| `PATCH` | `/settings` | `generation_provider`, `generation_model`, `llm_base_url`, `llm_model`, `llm_api_key`, `llm_disable_thinking`, `embedding_model`, `embedding_provider`, `tei_base_url`, `tei_model`, `gemini_api_key` 중 바꿀 것만 | `GET` 과 같은 형태의 갱신 결과. 목록 밖 모델·빈 `gemini_api_key`·주소 없는 `tei`·주소나 모델 없는 `openai_compat` 면 `422` |
+| `GET` | `/settings/llm-models?base_url=` | — | `{ "models": [...] }`. OpenAI 호환 서버의 `/v1/models` 를 대신 물어 옵니다. `base_url` 을 생략하면 저장된 주소를 쓰고, 붙지 못하면 `502` |
 | `POST` | `/reindex` | 없음 | `{ "provider": "tei", "dim": 1024, "pending": 12, "recreated": true }`. 임베딩 제공자에 붙지 못하면 `502` 이고 색인은 그대로 |
 
 `/batch` 는 문서 단위로 savepoint 를 잡기 때문에 한 문서의 색인이 실패해도 나머지는

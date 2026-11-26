@@ -134,6 +134,9 @@ export interface ModelOption {
 /** 임베딩을 어디서 받아오는지. 백엔드 EmbeddingProvider 와 같은 값이다. */
 export type EmbeddingProvider = "gemini" | "tei";
 
+/** 질의 해석·답변 생성을 어디에 맡기는지. 백엔드 GenerationProvider 와 같은 값이다. */
+export type GenerationProvider = "gemini" | "openai_compat";
+
 /**
  * GET·PATCH /api/settings 응답 본문. 백엔드 SettingsResponse 를 그대로 옮긴 형태다.
  *
@@ -143,8 +146,17 @@ export type EmbeddingProvider = "gemini" | "tei";
  * API key 원문은 이 응답에 없다. 저장돼 있는지(api_key_configured)와 끝 네 자리 힌트만 온다.
  */
 export interface SettingsBody {
-  answer_model: string;
-  query_rewrite_model: string;
+  generation_provider: GenerationProvider;
+  /** 제공자가 Gemini 일 때 질의 재작성·대시보드 구성·답변 생성이 함께 쓰는 모델. */
+  generation_model: string;
+  /** 제공자가 OpenAI 호환일 때의 서버 주소와 모델. 그 서버에 무엇이 있는지는 서버만 알아 자유 입력이다. */
+  llm_base_url: string;
+  llm_model: string;
+  /** OpenAI 호환 서버의 키도 원문은 오지 않는다. */
+  llm_api_key_configured: boolean;
+  llm_api_key_hint: string | null;
+  /** 추론 모델의 생각 단계를 건너뛰게 하는지(reasoning_effort: "none"). */
+  llm_disable_thinking: boolean;
   embedding_model: string;
   embedding_provider: EmbeddingProvider;
   tei_base_url: string;
@@ -164,6 +176,7 @@ export interface SettingsBody {
   vector_search_active: boolean;
   api_key_configured: boolean;
   api_key_hint: string | null;
+  generation_providers: ModelOption[];
   embedding_providers: ModelOption[];
   generation_models: ModelOption[];
   embedding_models: ModelOption[];
@@ -175,13 +188,23 @@ export interface SettingsBody {
  * 아예 빼서 보낸다. 빈 문자열을 보내면 백엔드가 거부한다.
  */
 export interface SettingsUpdateBody {
-  answer_model?: string;
-  query_rewrite_model?: string;
+  generation_provider?: GenerationProvider;
+  generation_model?: string;
+  llm_base_url?: string;
+  llm_model?: string;
+  /** Gemini 키와 달리 빈 문자열은 '저장된 키 지우기'다. 로컬 서버는 키가 없는 것이 보통이다. */
+  llm_api_key?: string;
+  llm_disable_thinking?: boolean;
   embedding_model?: string;
   embedding_provider?: EmbeddingProvider;
   tei_base_url?: string;
   tei_model?: string;
   gemini_api_key?: string;
+}
+
+/** GET /api/settings/llm-models 응답 본문. OpenAI 호환 서버의 /v1/models 가 알려준 모델 이름들. */
+export interface LlmModelsBody {
+  models: string[];
 }
 
 /**

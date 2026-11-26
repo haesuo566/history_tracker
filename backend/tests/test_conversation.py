@@ -149,9 +149,9 @@ def test_build_contents_maps_roles_and_appends_current_message_last():
 
     contents = _build_contents("그거 다시 찾아줘", history)
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "첫 질문"),
-        ("model", "첫 답변"),
+        ("assistant", "첫 답변"),
         ("user", "그거 다시 찾아줘"),
     ]
 
@@ -165,7 +165,7 @@ def test_build_contents_drops_a_leading_assistant_turn():
 
     contents = _build_contents("그거 다시 보여줘", history)
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "다음 질문"),
         ("user", "그거 다시 보여줘"),
     ]
@@ -179,7 +179,7 @@ def test_build_contents_skips_empty_messages():
 
     contents = _build_contents("그거 다시 보여줘", history)
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "첫 질문"),
         ("user", "그거 다시 보여줘"),
     ]
@@ -188,7 +188,7 @@ def test_build_contents_skips_empty_messages():
 def test_build_contents_without_history_sends_only_the_current_message():
     contents = _build_contents("파이썬 비동기 글 찾아줘", [])
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "파이썬 비동기 글 찾아줘")
     ]
 
@@ -206,10 +206,10 @@ def test_build_contents_appends_what_each_past_turn_showed():
 
     contents = _build_contents("아까 그 두 번째 거 다시", history, (), shown)
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "요리 블로그 찾아줘"),
         (
-            "model",
+            "assistant",
             (
                 "두 건 찾았어요\n\n"
                 "[이 턴에 보여준 목록]\n"
@@ -230,9 +230,9 @@ def test_build_contents_leaves_turns_without_a_listing_untouched():
 
     contents = _build_contents("다음 질문", history, (), {3: []})
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         ("user", "고마워"),
-        ("model", "천만에요"),
+        ("assistant", "천만에요"),
         ("user", "다음 질문"),
     ]
 
@@ -246,7 +246,7 @@ def test_build_contents_lists_candidates_just_before_the_current_message():
 
     contents = _build_contents("두 번째 것 자세히", [], candidates)
 
-    assert [(content.role, content.parts[0].text) for content in contents] == [
+    assert [(message.role, message.text) for message in contents] == [
         (
             "user",
             (

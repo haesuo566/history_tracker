@@ -1,7 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 
-from google.genai import types
 from loguru import logger
 
 from backend.core.config import settings
@@ -10,8 +9,8 @@ from backend.models.document import Document
 from backend.schemas.chat import ChatResult
 from backend.services.chat.timerange import TimeWindow, to_local
 from backend.services.conversation.prompt import render_history
-from backend.services.llm.gemini import get_client
-from backend.services.runtime_settings import get_settings
+from backend.services.llm.generation import ChatMessage
+from backend.services.llm.provider import get_generator
 
 # 세 프롬프트가 공유하는 규칙. 앞선 대화는 맥락으로만 쓰고 답변의 근거는 이번 턴에 주어진 것으로
 # 한정한다 — 이 문장이 없으면 지난 턴에 실린 목록을 이번 답변의 근거로 끌어다 쓴다.
@@ -54,13 +53,13 @@ def _contents(
     history: Sequence[Message],
     shown: Mapping[int, Sequence[Document]],
     prompt: str,
-) -> list[types.Content]:
+) -> list[ChatMessage]:
     """앞선 대화 뒤에 이번 턴의 프롬프트(질문 + 근거)를 붙인다.
 
     history를 함께 싣는 것은 '아까 그거'가 무엇인지 답변 단계도 알아야 하기 때문이다. 재작성이
     풀어낸 검색어는 검색에만 쓰이고, 답변은 사용자가 실제로 쓴 문장을 받는다.
     """
-    return [*render_history(history, shown), types.Content(role="user", parts=[types.Part(text=prompt)])]
+    return [*render_history(history, shown), ChatMessage(role="user", text=prompt)]
 
 
 def generate_answer(
@@ -68,15 +67,10 @@ def generate_answer(
     history: Sequence[Message] = (),
     shown: Mapping[int, Sequence[Document]] = {},
 ) -> str:
-    """etc 의도의 메시지에 대해 Gemini로 일반 대화 응답을 생성한다."""
-    model = get_settings().answer_model
-    logger.debug("generating chat answer via {}: {!r} (history={})", model, message, len(history))
-    response = get_client().models.generate_content(
-        model=model,
-        contents=_contents(history, shown, message),
-        config=types.GenerateContentConfig(system_instruction=SYSTEM_INSTRUCTION),
-    )
-    return response.text.strip()
+    """etc 의도의 메시지에 대해 일반 대화 응답을 생성한다."""
+    generator = get_generator()
+    logger.debug("generating chat answer via {}: {!r} (history={})", generator.model, message, len(history))
+    return generator.generate_text(SYSTEM_INSTRUCTION, _contents(history, shown, message))
 
 
 def _visited_on(moment: datetime | None, client_now: datetime | None) -> str:
@@ -106,15 +100,15 @@ def generate_recall_answer(
     window: TimeWindow | None = None,
     client_now: datetime | None = None,
 ) -> str:
-    """recall 의도의 메시지에 대해 검색된 기록(title, url, 본 날짜)을 근거로 Gemini 응답을 생성한다.
+    """recall 의도의 메시지에 대해 검색된 기록(title, url, 본 날짜)을 근거로 응답을 생성한다.
 
     window가 있으면 그 기간만 뒤졌다는 사실을 프롬프트에 함께 싣는다. 0건일 때 "기록이 없다"로
     끝나면 사용자는 아예 없는 줄로 알기 때문에, 어느 기간을 뒤졌는지 답변이 밝힐 수 있어야 한다.
     """
-    model = get_settings().answer_model
+    generator = get_generator()
     logger.debug(
         "generating recall answer via {}: {!r} ({} result(s), period={}, history={})",
-        model,
+        generator.model,
         message,
         len(results),
         window.label if window else None,
@@ -122,12 +116,10 @@ def generate_recall_answer(
     )
     found = "\n".join(_result_line(result, client_now) for result in results) or "(검색 결과 없음)"
     period = f"\n\n찾은 기간: {window.label}" if window else ""
-    response = get_client().models.generate_content(
-        model=model,
-        contents=_contents(history, shown, f"사용자 질문: {message}{period}\n\n검색된 기록:\n{found}"),
-        config=types.GenerateContentConfig(system_instruction=RECALL_SYSTEM_INSTRUCTION),
+    return generator.generate_text(
+        RECALL_SYSTEM_INSTRUCTION,
+        _contents(history, shown, f"사용자 질문: {message}{period}\n\n검색된 기록:\n{found}"),
     )
-    return response.text.strip()
 
 
 def generate_detail_answer(
@@ -137,10 +129,10 @@ def generate_detail_answer(
     shown: Mapping[int, Sequence[Document]] = {},
     client_now: datetime | None = None,
 ) -> str:
-    """detail 의도의 메시지에 대해 지목된 문서 한 건의 본문을 근거로 Gemini 응답을 생성한다.
+    """detail 의도의 메시지에 대해 지목된 문서 한 건의 본문을 근거로 응답을 생성한다.
 
     근거가 검색 결과의 발췌가 아니라 본문이라는 점이 generate_recall_answer와의 차이다. '자세히
-    알려줘'에 답하려면 발췌로는 부족하다. 근거로 쓸 본문이 없으면 Gemini를 부르지 않는다 —
+    알려줘'에 답하려면 발췌로는 부족하다. 근거로 쓸 본문이 없으면 모델을 부르지 않는다 —
     제목만 주면 그럴듯한 내용을 지어내기 때문이다.
     """
     prompt = _build_detail_prompt(message, document, settings.detail_max_chars, client_now)
@@ -148,21 +140,16 @@ def generate_detail_answer(
         logger.info("detail document has no usable body: document_id={}", document.document_id)
         return f"'{document.title}' 기록은 제목과 주소만 남아 있어 본문 내용을 알려드릴 수 없습니다."
 
-    model = get_settings().answer_model
+    generator = get_generator()
     logger.debug(
         "generating detail answer via {}: {!r} (document_id={} body={} chars, history={})",
-        model,
+        generator.model,
         message,
         document.document_id,
         len(document.full_text),
         len(history),
     )
-    response = get_client().models.generate_content(
-        model=model,
-        contents=_contents(history, shown, prompt),
-        config=types.GenerateContentConfig(system_instruction=DETAIL_SYSTEM_INSTRUCTION),
-    )
-    return response.text.strip()
+    return generator.generate_text(DETAIL_SYSTEM_INSTRUCTION, _contents(history, shown, prompt))
 
 
 def _build_detail_prompt(

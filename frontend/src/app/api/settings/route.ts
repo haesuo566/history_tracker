@@ -23,7 +23,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
-const MODEL_FIELDS = ["answer_model", "query_rewrite_model", "embedding_model"] as const;
+const MODEL_FIELDS = ["generation_model", "embedding_model"] as const;
 
 /**
  * 넘어온 항목만 추려서 백엔드로 보낸다.
@@ -41,6 +41,46 @@ function toUpdates(body: Record<string, unknown>): SettingsUpdateBody | string {
       return "모델을 선택해 주세요.";
     }
     updates[field] = value;
+  }
+
+  const generationProvider = body.generation_provider;
+  if (generationProvider !== undefined && generationProvider !== null) {
+    if (generationProvider !== "gemini" && generationProvider !== "openai_compat") {
+      return "생성 모델 제공자를 선택해 주세요.";
+    }
+    updates.generation_provider = generationProvider;
+  }
+
+  const llmBaseUrl = body.llm_base_url;
+  if (llmBaseUrl !== undefined && llmBaseUrl !== null) {
+    if (typeof llmBaseUrl !== "string" || llmBaseUrl.trim().length === 0) {
+      return "생성 모델 서버 주소를 입력해 주세요.";
+    }
+    const trimmed = llmBaseUrl.trim();
+    if (!/^https?:\/\//.test(trimmed)) {
+      return "생성 모델 서버 주소는 http:// 또는 https:// 로 시작해야 합니다.";
+    }
+    updates.llm_base_url = trimmed;
+  }
+
+  // 서버에 무엇이 올라가 있는지는 그 서버만 알아 목록으로 검증할 수 없다. 비었는지만 본다.
+  const llmModel = body.llm_model;
+  if (llmModel !== undefined && llmModel !== null) {
+    if (typeof llmModel !== "string" || llmModel.trim().length === 0) {
+      return "생성 모델 이름을 입력해 주세요.";
+    }
+    updates.llm_model = llmModel.trim();
+  }
+
+  // Gemini 키와 달리 빈 문자열은 '지우기'라 그대로 넘긴다.
+  const llmApiKey = body.llm_api_key;
+  if (typeof llmApiKey === "string") {
+    updates.llm_api_key = llmApiKey.trim();
+  }
+
+  const disableThinking = body.llm_disable_thinking;
+  if (typeof disableThinking === "boolean") {
+    updates.llm_disable_thinking = disableThinking;
   }
 
   const provider = body.embedding_provider;
@@ -104,7 +144,7 @@ export async function PATCH(request: Request): Promise<Response> {
       // 시도하면 될 일로 읽는다.
       if (error.status === 422) {
         return jsonError(
-          "설정값을 저장할 수 없습니다. 선택한 모델, TEI 주소, API key 를 확인해 주세요.",
+          "설정값을 저장할 수 없습니다. 선택한 모델, 서버 주소, API key 를 확인해 주세요.",
           400,
         );
       }

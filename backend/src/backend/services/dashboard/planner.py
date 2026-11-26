@@ -11,7 +11,6 @@
 import re
 from collections.abc import Mapping, Sequence
 
-from google.genai import types
 from loguru import logger
 
 from backend.models.conversation import Message, MessageRole
@@ -20,8 +19,8 @@ from backend.schemas.dashboard import Dashboard, DashboardPlan
 from backend.services.chat.timerange import TimeWindow
 from backend.services.conversation.prompt import render_history
 from backend.services.dashboard.semantic_layer import catalog
-from backend.services.llm.gemini import get_client
-from backend.services.runtime_settings import get_settings
+from backend.services.llm.generation import ChatMessage
+from backend.services.llm.provider import get_generator
 
 SYSTEM_INSTRUCTION = (
     "너는 사용자의 웹 브라우징 기록으로 대시보드를 구성한다. 마지막 사용자 메시지를 아래 시멘틱 "
@@ -93,16 +92,12 @@ def _build_contents(
     history: Sequence[Message],
     shown: Mapping[int, Sequence[Document]],
     previous: Dashboard | None,
-) -> list[types.Content]:
-    contents = render_history(history, shown)
+) -> list[ChatMessage]:
+    messages = render_history(history, shown)
     if previous is not None:
-        contents.append(
-            types.Content(
-                role="user", parts=[types.Part(text=f"직전에 만든 대시보드:\n{describe(previous)}")]
-            )
-        )
-    contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
-    return contents
+        messages.append(ChatMessage(role="user", text=f"직전에 만든 대시보드:\n{describe(previous)}"))
+    messages.append(ChatMessage(role="user", text=message))
+    return messages
 
 
 def plan_dashboard(
@@ -115,29 +110,19 @@ def plan_dashboard(
 
     None 은 '만들 수 없다'가 아니라 '무엇을 만들지 모른다'다. 부르는 쪽은 둘을 다르게 답한다.
     """
-    model = get_settings().query_rewrite_model
+    generator = get_generator()
     previous = latest_dashboard(history)
     logger.debug(
         "planning dashboard via {}: {!r} (period={}, history={}, previous={!r})",
-        model,
+        generator.model,
         message,
         window.label if window else None,
         len(history),
         previous.title if previous else None,
     )
-    response = get_client().models.generate_content(
-        model=model,
-        contents=_build_contents(message, history, shown, previous),
-        config=types.GenerateContentConfig(
-            system_instruction=_system_instruction(window),
-            response_mime_type="application/json",
-            response_schema=DashboardPlan,
-        ),
+    return generator.generate_structured(
+        _system_instruction(window), _build_contents(message, history, shown, previous), DashboardPlan
     )
-    if not isinstance(response.parsed, DashboardPlan):
-        logger.warning("dashboard plan unparsable: {!r}", response.text)
-        return None
-    return response.parsed
 
 
 # 모델이 지시를 어기고 비슷한 측정값으로 바꿔 채우는 경우를 막는 마지막 그물이다. 수집하지 않는다는

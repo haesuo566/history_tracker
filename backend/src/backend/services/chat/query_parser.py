@@ -1,30 +1,33 @@
+"""사용자 입력을 의도와 검색어, 메타데이터로 해석한다.
+
+의도마다 도구를 하나씩 두고, 모델이 그중 하나를 골라 호출하게 한다(function calling). 어떤 도구를
+골랐는지가 곧 의도이고, 그 도구의 인자가 그 의도에 필요한 값이다. 의도 하나에 모든 필드를 담는
+단일 스키마로 받으면 'detail이 아니면 target_index는 null' 같은 조건부 규칙을 지시문으로 부탁해야
+하는데, 도구로 나누면 그런 필드가 애초에 다른 도구에 없다. 각 필드의 뜻도 지시문 대신 그 필드의
+description에 적어 두어, 모델이 인자를 채우는 바로 그 자리에서 보게 한다.
+
+모델 쪽 표현(도구 인자)은 여기서 ParsedQuery로 바꿔 내보낸다. 호출하는 쪽은 도구가 무엇인지 모른다.
+"""
+
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 
-from google.genai import types
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.models.conversation import Message
 from backend.models.document import Document
 from backend.services.chat.intent import Intent
 from backend.services.chat.timerange import TimeRange, local_now
 from backend.services.conversation.prompt import format_listing, render_history
-from backend.services.llm.gemini import get_client
-from backend.services.runtime_settings import get_settings
+from backend.services.llm.generation import ChatMessage, Tool, ToolCall, json_schema_of
+from backend.services.llm.provider import get_generator
 
 
 class ParsedQuery(BaseModel):
-    """rewrite_query의 구조화 출력 스키마."""
+    """rewrite_query의 결과. 어느 도구가 불렸든 이 모양으로 맞춰 내보낸다."""
 
-    # 이 docstring과 필드 순서는 그대로 Gemini에 스키마로 전달된다(description, propertyOrdering).
-    # 설명은 모델에게 도움이 될 만큼만 적고, 설계 근거는 주석으로 남긴다. intent를 앞에 두는 것은
-    # 의도를 먼저 정하고 그에 맞는 검색어를 쓰게 하려는 의도다 — 지시 표현이 무엇을 가리키는지
-    # 찾는 일과 이 턴이 recall인지 판단하는 일이 같은 추론이라 한 호출로 함께 받는다.
-    # target_index가 query보다 앞인 것도 같은 이유다. 지목한 대상을 먼저 정해야 그 제목을 검색어로
-    # 쓸 수 있다.
-    # time_range도 query보다 앞이다. 시간 표현을 먼저 떼어내야 그것을 뺀 검색어를 쓰게 된다 —
-    # "어제"가 검색어에 남으면 그 낱말로 본문을 뒤져 엉뚱한 문서가 걸린다.
     intent: Intent
     target_index: int | None = None
     time_range: TimeRange = TimeRange()
@@ -32,50 +35,101 @@ class ParsedQuery(BaseModel):
     desired_count: int | None = None
 
 
-SYSTEM_INSTRUCTION = (
-    "사용자의 입력을 다음 JSON 형식으로 변환하라. "
-    "앞선 대화가 함께 주어지면 맥락 파악에만 쓰고, 판단과 재작성의 대상은 항상 마지막 사용자 메시지다. "
-    "intent 필드에는 마지막 사용자 메시지의 의도를 담아라. "
-    "recall: 과거에 방문했거나 열람한 웹 페이지/사이트/글을 기록에서 새로 찾으려는 의도. "
-    "detail: 앞선 대화에서 이미 찾아준 결과 중 하나를 지목해 그 페이지의 내용을 더 알려달라는 의도. "
-    "'두 번째 것 자세히', '첫 번째 링크 내용이 뭐였지', '거기 가격 얼마였어'처럼 지목한 대상이 앞선 "
-    "대화의 결과 목록 안에 있어야 detail이다. 앞선 대화에 결과가 없거나 기록을 새로 뒤져야 하면 "
-    "detail이 아니라 recall이다. "
-    "dashboard: 기록을 하나하나 찾는 것이 아니라 모아서 세거나 그래프·차트·대시보드·통계로 보여달라는 "
-    "의도. '이번 달 사이트별로 몇 개 봤어', '요일별 추이 그래프', '지난주에 리액트 글 몇 개 읽었지'처럼 "
-    "답이 페이지 목록이 아니라 숫자나 그래프인 질의다. 앞서 만든 대시보드를 '주별로 바꿔줘'처럼 "
-    "고치라는 요청도 dashboard다. 차트나 그래프를 다룬 글을 찾는 것('d3 차트 글 찾아줘')은 recall이다. "
-    "etc: 그 외 잡담이나 무관한 질문. "
-    "번호가 붙은 결과 목록이 함께 주어지면 detail 판단의 근거는 그 목록이다. intent가 detail이면 "
-    "사용자가 지목한 항목의 번호를 target_index에 담아라. 순서('두 번째'), 제목의 일부, 사이트 "
-    "이름이나 주소 등 무엇으로 가리켰든 목록에서 그 항목을 찾아 번호로 바꿔라. 목록에서 하나로 "
-    "좁힐 수 없으면 target_index는 null이고, 그때는 detail이 아니라 recall이다. "
-    "목록이 주어지지 않았거나 intent가 detail이 아니면 target_index는 null이다. "
-    "time_range 필드에는 마지막 사용자 메시지가 가리키는 기간을 담아라. kind는 다음 중 하나다. "
-    "none: 기간을 말하지 않았다. today: 오늘. yesterday: 어제. this_week: 이번 주. "
-    "last_week: 지난주. this_month: 이번 달. last_month: 지난달. "
-    "recent_days: '최근 사흘', '요 며칠', '일주일 사이'처럼 오늘로부터 며칠간을 말한 경우이며, "
-    "days에 그 일수를 정수로 담아라. "
-    "absolute: '8월 20일', '3월 초에', '20일부터 22일까지'처럼 특정 날짜나 날짜 구간을 말한 경우이며, "
-    "since와 until에 YYYY-MM-DD 형식으로 담아라. 하루만 말했으면 since와 until을 같은 날로 하고, "
-    "연도를 말하지 않았으면 오늘 날짜를 기준으로 가장 가까운 과거의 그 날짜로 정하라. "
-    "kind가 recent_days가 아니면 days는 null, absolute가 아니면 since와 until은 null이다. "
-    "'최근에', '요즘', '얼마 전에'처럼 기간이 분명하지 않은 말은 none으로 두어라 — 임의로 며칠을 "
-    "정하면 사용자가 말하지 않은 기간으로 기록을 잘라내게 된다. "
-    "query 필드에는 검색 엔진에 넣기 좋은 간결한 한국어 검색어 문장을 담아라. "
-    "대화체, 잡담, 존댓말 표현은 제거하고 핵심 주제와 키워드만 남겨라. "
-    "시간 표현은 query에서 빼라 — 그것은 time_range가 담는다. '어제 본 리액트 상태관리 글'의 "
-    "query는 '리액트 상태관리'다. 시간 표현을 빼면 검색어가 비는 질의('어제 본 거 다 보여줘')는 "
-    "query를 빈 문자열로 두어라. "
-    "'그거', '아까 그 사이트', '두 번째 것'처럼 앞선 대화를 가리키는 표현은 대화에서 그 대상을 찾아 "
-    "구체적인 명사나 제목으로 바꿔라. 가리키는 대상을 찾을 수 없으면 그 표현은 버려라. "
-    "intent가 detail이면 query에는 지목된 그 결과 하나를 특정할 수 있는 제목이나 키워드만 담아라. "
-    "intent가 etc나 dashboard이면 query는 쓰이지 않으므로 마지막 사용자 메시지를 그대로 담아도 된다. "
-    "dashboard도 time_range는 똑같이 채워라 — 대시보드가 볼 기간이다. 앞서 만든 대시보드를 고치라는 "
-    "요청이 기간을 새로 말하지 않았으면 그 대시보드의 기간을 그대로 담아라. "
-    "desired_count 필드에는 사용자가 '3개만', '다섯 개 찾아줘'처럼 결과 개수를 명시적으로 요청한 경우 "
-    "그 숫자를 정수로, 그렇지 않으면 null을 담아라."
+# 아래 도구 인자 모델의 docstring은 도구 설명으로, 필드 description은 인자 설명으로 그대로 모델에
+# 전달된다. 설명은 모델에게 도움이 될 만큼만 적고, 설계 근거는 주석으로 남긴다.
+
+
+class SearchHistory(BaseModel):
+    """과거에 방문했거나 열람한 웹 페이지·사이트·글을 기록에서 새로 찾는다. 차트나 그래프를 다룬 글을
+    찾는 것('d3 차트 글 찾아줘')도 여기다. 앞선 대화의 결과 목록에서 하나를 지목할 수 없거나 기록을
+    새로 뒤져야 하면 이 도구를 쓴다."""
+
+    # time_range가 query보다 앞이다. 시간 표현을 먼저 떼어내야 그것을 뺀 검색어를 쓰게 된다 —
+    # "어제"가 검색어에 남으면 그 낱말로 본문을 뒤져 엉뚱한 문서가 걸린다.
+    time_range: TimeRange = Field(default_factory=TimeRange, description="찾을 기록의 기간.")
+    query: str = Field(
+        description=(
+            "검색 엔진에 넣기 좋은 간결한 한국어 검색어. 대화체·잡담·존댓말은 빼고 핵심 주제와 키워드만 "
+            "남긴다. 시간 표현은 빼고 time_range에 담는다 — '어제 본 리액트 상태관리 글'이면 "
+            "'리액트 상태관리'다. 시간 표현을 빼면 남는 것이 없는 질의('어제 본 거 다 보여줘')는 빈 문자열."
+        )
+    )
+    desired_count: int | None = Field(
+        None, description="'3개만', '다섯 개 찾아줘'처럼 결과 개수를 명시했을 때만 그 숫자. 아니면 null."
+    )
+
+
+class ShowDetail(BaseModel):
+    """앞선 대화에서 이미 보여준 번호 붙은 결과 목록 중 하나를 지목해 그 페이지의 내용을 더 묻는다.
+    '두 번째 것 자세히', '첫 번째 링크 내용이 뭐였지', '거기 가격 얼마였어'처럼 지목한 대상이 목록 안에
+    있어야 한다. 목록이 없거나 하나로 좁힐 수 없으면 이 도구가 아니라 search_history다."""
+
+    # target_index가 title_hint보다 앞이다. 지목한 대상을 먼저 정해야 그 제목을 적을 수 있다.
+    target_index: int = Field(
+        description=(
+            "지목한 항목의 목록 번호. 순서('두 번째'), 제목의 일부, 사이트 이름이나 주소 등 무엇으로 "
+            "가리켰든 목록에서 그 항목을 찾아 번호로 바꾼다."
+        )
+    )
+    # 번호가 목록 범위를 벗어났을 때 제목으로 다시 찾는 근거다(services/chat/detail.py).
+    title_hint: str = Field(description="지목한 항목을 특정할 수 있는 제목이나 키워드.")
+
+
+class BuildDashboard(BaseModel):
+    """기록을 하나하나 찾는 대신 모아서 세거나 그래프·차트·대시보드·통계로 보여준다. '이번 달 사이트별로
+    몇 개 봤어', '요일별 추이 그래프', '지난주에 리액트 글 몇 개 읽었지'처럼 답이 페이지 목록이 아니라
+    숫자나 그래프인 질의다. 앞서 만든 대시보드를 '주별로 바꿔줘'처럼 고치라는 요청도 여기다."""
+
+    # 무엇을 셀지는 여기서 받지 않는다. 그것은 대시보드 계획 호출(services/dashboard/planner.py)이
+    # 카탈로그를 보고 정한다. 기간만은 검색과 같은 규칙으로 풀어야 해서 여기서 받는다.
+    time_range: TimeRange = Field(
+        default_factory=TimeRange,
+        description=(
+            "대시보드가 볼 기간. 앞서 만든 대시보드를 고치는 요청이 기간을 새로 말하지 않았으면 그 "
+            "대시보드의 기간을 그대로 담는다."
+        ),
+    )
+
+
+class Chat(BaseModel):
+    """기록을 찾거나 세는 것과 무관한 잡담이나 일반 질문."""
+
+
+@dataclass(frozen=True)
+class _Tool:
+    name: str
+    arguments: type[BaseModel]
+
+
+_TOOLS = (
+    _Tool("search_history", SearchHistory),
+    _Tool("show_detail", ShowDetail),
+    _Tool("build_dashboard", BuildDashboard),
+    _Tool("chat", Chat),
 )
+_TOOLS_BY_NAME = {tool.name: tool for tool in _TOOLS}
+
+
+SYSTEM_INSTRUCTION = (
+    "너는 사용자의 웹 방문 기록을 다루는 도우미의 질의 해석기다. 마지막 사용자 메시지를 읽고 주어진 "
+    "도구 중 정확히 하나를 골라 호출하라. "
+    "앞선 대화와 결과 목록은 맥락 파악에만 쓰고, 판단의 대상은 항상 마지막 사용자 메시지다. "
+    "'그거', '아까 그 사이트', '두 번째 것'처럼 앞선 대화를 가리키는 표현은 대화에서 그 대상을 찾아 "
+    "구체적인 명사나 제목으로 바꿔 인자에 담아라. 가리키는 대상을 찾을 수 없으면 그 표현은 버려라."
+)
+
+
+def _declare(tool: _Tool) -> Tool:
+    schema = json_schema_of(tool.arguments)
+    description = schema.pop("description")
+    schema.pop("title", None)
+    return Tool(
+        name=tool.name,
+        description=description,
+        # 인자가 없는 도구에 빈 object 스키마를 붙이지 않는다.
+        parameters=schema if schema.get("properties") else None,
+    )
+
 
 _WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
 
@@ -98,23 +152,18 @@ def _build_contents(
     history: Sequence[Message],
     candidates: Sequence[Document] = (),
     shown: Mapping[int, Sequence[Document]] = {},
-) -> list[types.Content]:
+) -> list[ChatMessage]:
     """앞선 대화를 옮기고(services/conversation/prompt.py) 후보 목록과 이번 입력을 뒤에 붙인다.
 
     후보 목록은 이번 입력 바로 앞에 번호를 붙여 끼운다. 목록을 따로 보여줘야 판단과 번호 지목이
     같은 것을 보고 이뤄진다. 별개의 발화로 두는 것은 '판단 대상은 마지막 사용자 메시지'라는 지시를
     흐리지 않기 위해서다. 이 목록과 겹치는 직전 턴은 shown에서 미리 빠져 있다(results.past_shown).
     """
-    contents = render_history(history, shown)
+    messages = render_history(history, shown)
     if candidates:
-        contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part(text=f"직전에 보여준 결과 목록:\n{format_listing(candidates)}")],
-            )
-        )
-    contents.append(types.Content(role="user", parts=[types.Part(text=message)]))
-    return contents
+        messages.append(ChatMessage(role="user", text=f"직전에 보여준 결과 목록:\n{format_listing(candidates)}"))
+    messages.append(ChatMessage(role="user", text=message))
+    return messages
 
 
 def rewrite_query(
@@ -132,27 +181,60 @@ def rewrite_query(
     거슬러 가리키는 표현을 풀어낼 근거가 된다.
     client_now는 사용자의 현재 시각으로, 날짜를 직접 말한 질의의 연도·월을 정하는 데 쓰인다.
     """
-    model = get_settings().query_rewrite_model
+    generator = get_generator()
     logger.debug(
         "rewriting query via {}: {!r} (history={} message(s), candidates={}, listed turns={})",
-        model,
+        generator.model,
         message,
         len(history),
         len(candidates),
         len(shown),
     )
-    response = get_client().models.generate_content(
-        model=model,
-        contents=_build_contents(message, history, candidates, shown),
-        config=types.GenerateContentConfig(
-            system_instruction=_system_instruction(client_now),
-            response_mime_type="application/json",
-            response_schema=ParsedQuery,
-        ),
+    # 잡담도 chat 도구로 받으므로 어떤 입력이든 도구 하나가 골라져야 한다.
+    calls = generator.choose_tool(
+        _system_instruction(client_now),
+        _build_contents(message, history, candidates, shown),
+        [_declare(tool) for tool in _TOOLS],
     )
-    if not isinstance(response.parsed, ParsedQuery):
+    parsed = _parse_call(calls, message)
+    if parsed is None:
         # 의도까지 못 받은 상황이라 검색으로 밀어봐야 원문 그대로 찾는 헛질의가 된다. etc로 두어
         # 일반 대화로 답하게 한다(분류 실패 시의 기존 동작과 같다).
-        logger.warning("query rewrite unparsable, falling back to raw message: {!r}", response.text)
+        logger.warning("query rewrite unparsable, falling back to raw message: {!r}", message)
         return ParsedQuery(intent=Intent.ETC, query=message)
-    return response.parsed
+    return parsed
+
+
+def _parse_call(calls: Sequence[ToolCall], message: str) -> ParsedQuery | None:
+    """모델이 부른 도구를 ParsedQuery로 바꾼다. 알아볼 수 없는 호출이면 None."""
+    if not calls:
+        return None
+    if len(calls) > 1:
+        # 도구는 하나만 고르라고 했다. 여러 개가 오면 먼저 고른 것을 따른다.
+        logger.warning("query rewrite called {} tools, using the first: {}", len(calls), [c.name for c in calls])
+    call = calls[0]
+    tool = _TOOLS_BY_NAME.get(call.name)
+    if tool is None:
+        logger.warning("query rewrite called an unknown tool: {!r}", call.name)
+        return None
+    try:
+        arguments = tool.arguments.model_validate(call.args)
+    except ValidationError as error:
+        logger.warning("query rewrite gave invalid arguments for {}: {}", call.name, error)
+        return None
+
+    match arguments:
+        case SearchHistory():
+            return ParsedQuery(
+                intent=Intent.RECALL,
+                time_range=arguments.time_range,
+                query=arguments.query,
+                desired_count=arguments.desired_count,
+            )
+        case ShowDetail():
+            return ParsedQuery(intent=Intent.DETAIL, target_index=arguments.target_index, query=arguments.title_hint)
+        # dashboard와 etc에는 검색어가 쓰이지 않는다. 원문을 그대로 실어 둔다.
+        case BuildDashboard():
+            return ParsedQuery(intent=Intent.DASHBOARD, time_range=arguments.time_range, query=message)
+        case _:
+            return ParsedQuery(intent=Intent.ETC, query=message)

@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
 
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # 모델이 "최근 300일" 같은 값을 내놓아도 사실상 전체 검색이라 뜻이 없다. 상한을 두어 터무니없는
 # 값이 그대로 구간이 되지 않게 한다.
@@ -40,16 +40,33 @@ class TimeRangeKind(StrEnum):
 
 
 class TimeRange(BaseModel):
-    """rewrite_query가 질의에서 뽑아내는 기간. 그대로 Gemini 스키마가 된다.
+    """사용자가 말한 기간. 말하지 않았으면 kind를 none으로 둔다."""
 
-    날짜를 문자열로 받는 것은 Gemini 스키마가 date 형식을 그대로 받아주지 않기 때문이다. 파싱은
-    resolve가 맡고, 형식이 어긋난 값은 기간 없음으로 흘린다.
-    """
-
-    kind: TimeRangeKind = TimeRangeKind.NONE
-    days: int | None = None
-    since: str | None = None
-    until: str | None = None
+    # docstring과 필드 description은 rewrite_query의 도구 인자 스키마로 그대로 모델에 전달된다.
+    # 날짜를 문자열로 받는 것은 Gemini 스키마가 date 형식을 그대로 받아주지 않기 때문이다. 파싱은
+    # resolve가 맡고, 형식이 어긋난 값은 기간 없음으로 흘린다.
+    kind: TimeRangeKind = Field(
+        TimeRangeKind.NONE,
+        description=(
+            "none: 기간을 말하지 않았다. '최근에', '요즘', '얼마 전에'처럼 분명하지 않은 말도 none이다. "
+            "today: 오늘. yesterday: 어제. this_week: 이번 주. last_week: 지난주. "
+            "this_month: 이번 달. last_month: 지난달. "
+            "recent_days: '최근 사흘', '요 며칠', '일주일 사이'처럼 오늘로부터 며칠간. "
+            "absolute: '8월 20일', '3월 초에', '20일부터 22일까지'처럼 특정 날짜나 날짜 구간."
+        ),
+    )
+    days: int | None = Field(None, description="kind가 recent_days일 때만 그 일수. 아니면 null.")
+    since: str | None = Field(
+        None,
+        description=(
+            "kind가 absolute일 때만 구간의 첫날(YYYY-MM-DD). 아니면 null. 연도를 말하지 않았으면 "
+            "오늘을 기준으로 가장 가까운 과거의 그 날짜로 정한다."
+        ),
+    )
+    until: str | None = Field(
+        None,
+        description="kind가 absolute일 때만 구간의 마지막 날(YYYY-MM-DD). 하루만 말했으면 since와 같은 날. 아니면 null.",
+    )
 
 
 @dataclass(frozen=True)

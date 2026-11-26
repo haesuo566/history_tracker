@@ -1,8 +1,9 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 from backend.core.config import settings
 from backend.core.model_catalog import (
     EmbeddingProvider,
+    GenerationProvider,
     find_embedding_model,
     find_generation_model,
 )
@@ -30,8 +31,15 @@ class SettingsResponse(BaseModel):
     그것인지 알아볼 수 있도록 끝 네 자리만 남긴 힌트를 준다.
     """
 
-    answer_model: str
-    query_rewrite_model: str
+    generation_provider: GenerationProvider
+    # 제공자가 Gemini일 때의 모델. OpenAI 호환일 때는 아래 llm_* 를 쓴다.
+    generation_model: str
+    llm_base_url: str
+    llm_model: str
+    # OpenAI 호환 서버의 키도 Gemini 키처럼 원문을 싣지 않는다.
+    llm_api_key_configured: bool
+    llm_api_key_hint: str | None = None
+    llm_disable_thinking: bool
     embedding_model: str
     embedding_provider: EmbeddingProvider
     tei_base_url: str
@@ -51,9 +59,16 @@ class SettingsResponse(BaseModel):
     vector_search_active: bool
     api_key_configured: bool
     api_key_hint: str | None = None
+    generation_providers: list[ProviderOption]
     embedding_providers: list[ProviderOption]
     generation_models: list[ModelOption]
     embedding_models: list[ModelOption]
+
+
+class LlmModelsResponse(BaseModel):
+    """GET /settings/llm-models 응답. OpenAI 호환 서버가 알려준 모델 이름들."""
+
+    models: list[str]
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -64,26 +79,50 @@ class SettingsUpdateRequest(BaseModel):
     처리할 수 없어, 저장 버튼을 잘못 눌러 앱이 멈추는 쪽이 손해가 크다.
     """
 
-    answer_model: str | None = None
-    query_rewrite_model: str | None = None
+    generation_provider: GenerationProvider | None = None
+    generation_model: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    # 키가 없는 로컬 서버가 흔하므로 Gemini 키와 달리 빈 문자열은 '지우기'다.
+    llm_api_key: str | None = None
+    llm_disable_thinking: bool | None = None
     embedding_model: str | None = None
     embedding_provider: EmbeddingProvider | None = None
     tei_base_url: str | None = None
     tei_model: str | None = None
     gemini_api_key: str | None = None
 
-    @field_validator("tei_base_url")
+    @field_validator("tei_base_url", "llm_base_url")
     @classmethod
-    def _clean_base_url(cls, value: str | None) -> str | None:
-        """TEI 주소는 http(s) 절대 주소여야 한다. 형태만 보고, 실제로 붙는지는 재색인이 확인한다."""
+    def _clean_base_url(cls, value: str | None, info: ValidationInfo) -> str | None:
+        """서버 주소는 http(s) 절대 주소여야 한다. 형태만 보고, 실제로 붙는지는 쓰는 쪽이 확인한다.
+
+        scheme 없이 host:port 만 넣으면 httpx 가 상대 URL 로 보고 엉뚱한 곳을 부른다.
+        """
         if value is None:
             return None
         stripped = value.strip().rstrip("/")
         if not stripped:
-            raise ValueError("tei_base_url must not be blank")
+            raise ValueError(f"{info.field_name} must not be blank")
         if not stripped.startswith(("http://", "https://")):
-            raise ValueError("tei_base_url must start with http:// or https://")
+            raise ValueError(f"{info.field_name} must start with http:// or https://")
         return stripped
+
+    @field_validator("llm_model")
+    @classmethod
+    def _clean_llm_model(cls, value: str | None) -> str | None:
+        # 목록으로 검증할 수 없는 자유 입력이다. 공백만 걸러 낸다.
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("llm_model must not be blank")
+        return stripped
+
+    @field_validator("llm_api_key")
+    @classmethod
+    def _clean_llm_api_key(cls, value: str | None) -> str | None:
+        return None if value is None else value.strip()
 
     @field_validator("tei_model")
     @classmethod
@@ -91,7 +130,7 @@ class SettingsUpdateRequest(BaseModel):
         # TEI는 서버에 올린 모델을 쓰므로 모델명은 표시·호환 서버용이고 비워 둘 수 있다.
         return None if value is None else value.strip()
 
-    @field_validator("answer_model", "query_rewrite_model")
+    @field_validator("generation_model")
     @classmethod
     def _known_generation_model(cls, value: str | None) -> str | None:
         if value is None:

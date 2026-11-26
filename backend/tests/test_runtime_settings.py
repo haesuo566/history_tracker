@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from backend.core.config import settings
-from backend.core.model_catalog import EmbeddingProvider, chunk_chars_for
+from backend.core.model_catalog import (
+    EmbeddingProvider,
+    GenerationProvider,
+    chunk_chars_for,
+)
 from backend.db.base import Base
 from backend.models.app_setting import AppSetting
 from backend.services import runtime_settings as runtime_settings_module
@@ -30,8 +34,12 @@ def runtime_settings(**overrides) -> RuntimeSettings:
     base = {
         "gemini_api_key": "test-key",
         "embedding_model": "gemini-embedding-001",
-        "query_rewrite_model": "gemini-3.1-flash-lite",
-        "answer_model": "gemini-3.1-flash-lite",
+        "generation_provider": GenerationProvider.GEMINI,
+        "generation_model": "gemini-3.1-flash-lite",
+        "llm_base_url": "",
+        "llm_model": "",
+        "llm_api_key": "",
+        "llm_disable_thinking": False,
         "embedding_provider": EmbeddingProvider.GEMINI,
         "tei_base_url": "",
         "tei_model": "",
@@ -57,40 +65,38 @@ def test_an_empty_table_falls_back_to_the_env_file(db):
     """설정 화면을 한 번도 쓰지 않은 환경의 동작이 예전과 같아야 한다."""
     current = load_settings(db)
 
-    assert current.answer_model == settings.answer_model
-    assert current.query_rewrite_model == settings.query_rewrite_model
+    assert current.generation_model == settings.generation_model
     assert current.embedding_model == settings.embedding_model
     assert current.gemini_api_key == settings.gemini_api_key
 
 
 def test_a_stored_value_wins_over_the_env_file(db):
-    save_settings({"answer_model": "gemini-2.5-pro"}, db)
+    save_settings({"generation_model": "gemini-2.5-pro"}, db)
 
-    assert load_settings(db).answer_model == "gemini-2.5-pro"
+    assert load_settings(db).generation_model == "gemini-2.5-pro"
 
 
 def test_untouched_items_keep_falling_back(db):
     """부분 갱신이므로 저장하지 않은 항목은 .env 값을 그대로 써야 한다."""
-    save_settings({"answer_model": "gemini-2.5-pro"}, db)
+    save_settings({"generation_model": "gemini-2.5-pro"}, db)
 
     current = load_settings(db)
-    assert current.query_rewrite_model == settings.query_rewrite_model
     assert current.embedding_model == settings.embedding_model
 
 
 def test_saving_twice_overwrites_instead_of_piling_up(db):
-    save_settings({"answer_model": "gemini-2.5-pro"}, db)
-    save_settings({"answer_model": "gemini-2.5-flash"}, db)
+    save_settings({"generation_model": "gemini-2.5-pro"}, db)
+    save_settings({"generation_model": "gemini-2.5-flash"}, db)
 
-    assert load_settings(db).answer_model == "gemini-2.5-flash"
+    assert load_settings(db).generation_model == "gemini-2.5-flash"
     assert db.query(AppSetting).count() == 1
 
 
 def test_saving_refreshes_the_cache(db):
     """캐시가 남아 있으면 저장 직후의 질의가 예전 모델로 나간다."""
-    save_settings({"answer_model": "gemini-2.5-pro"}, db)
+    save_settings({"generation_model": "gemini-2.5-pro"}, db)
 
-    assert get_settings().answer_model == "gemini-2.5-pro"
+    assert get_settings().generation_model == "gemini-2.5-pro"
 
 
 def test_an_unknown_key_is_rejected(db):
@@ -128,21 +134,29 @@ def test_a_missing_api_key_is_reported_as_unconfigured(db, monkeypatch):
 
 def test_a_model_set_only_in_the_env_file_still_appears_as_a_choice(db, monkeypatch):
     """선택지에 없으면 화면이 지금 값을 표시할 수 없어, 저장만으로 모델이 조용히 바뀐다."""
-    monkeypatch.setattr(settings, "answer_model", "gemini-experimental-9")
+    monkeypatch.setattr(settings, "generation_model", "gemini-experimental-9")
 
     described = describe_settings(db)
 
-    assert described.answer_model == "gemini-experimental-9"
+    assert described.generation_model == "gemini-experimental-9"
     assert "gemini-experimental-9" in [option.id for option in described.generation_models]
 
 
-def test_the_choice_list_has_no_duplicates_when_both_models_are_custom(db, monkeypatch):
-    monkeypatch.setattr(settings, "answer_model", "gemini-experimental-9")
-    monkeypatch.setattr(settings, "query_rewrite_model", "gemini-experimental-9")
+def test_an_generation_model_saved_before_the_merge_carries_over(db):
+    """모델을 하나로 합치기 전에 화면에서 고른 답변 모델이 조용히 .env 값으로 돌아가면 안 된다."""
+    db.add(AppSetting(key="generation_model", value="gemini-2.5-pro"))
+    db.commit()
 
-    ids = [option.id for option in describe_settings(db).generation_models]
+    assert load_settings(db).generation_model == "gemini-2.5-pro"
 
-    assert ids.count("gemini-experimental-9") == 1
+
+def test_a_newly_saved_generation_model_wins_over_the_legacy_generation_model(db):
+    db.add(AppSetting(key="generation_model", value="gemini-2.5-pro"))
+    db.commit()
+
+    save_settings({"generation_model": "gemini-2.5-flash"}, db)
+
+    assert load_settings(db).generation_model == "gemini-2.5-flash"
 
 
 def test_changing_the_api_key_rebuilds_the_gemini_client(db, monkeypatch):

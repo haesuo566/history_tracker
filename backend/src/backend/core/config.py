@@ -12,8 +12,7 @@ class Settings(BaseSettings):
     embedding_dim: int
     gemini_api_key: str
     embedding_model: str
-    query_rewrite_model: str
-    answer_model: str
+    generation_model: str
     min_cosine_similarity: float
     min_fts_matched_terms: int
     chat_history_messages: int
